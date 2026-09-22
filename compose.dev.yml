@@ -1,0 +1,19 @@
+# 파이프라인 로직 개발용. 호스트(브라우저)의 프록시를 localhost:8080 으로 지정해서 쓴다.
+# 스풀 보호 규칙·OS 프록시 설정·CA 신뢰 등록은 컨테이너(Linux)로 검증되지 않는다 — 호스트에서 확인할 것.
+name: platform-agent
+
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: ["sh", "-c", "./scripts/gen_proto.sh && /opt/venv/bin/mitmdump --listen-host 0.0.0.0 --listen-port 8080"]
+    volumes:
+      - .:/app
+      # mitmproxy CA. 호스트 신뢰 저장소에 등록할 인증서는 ./.mitmproxy/mitmproxy-ca-cert.pem
+      - ./.mitmproxy:/root/.mitmproxy
+    environment:
+      # platform-server의 make dev 스택 (nginx)
+      VERDICT_SERVER_ADDRESS: host.docker.internal:80
+    ports:
+      - "8080:8080"

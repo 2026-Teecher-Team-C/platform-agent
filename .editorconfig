@@ -1,0 +1,26 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# 우테코 스타일: 4칸 들여쓰기, 줄바꿈 들여쓰기 8칸, 120자
+[*.java]
+max_line_length = 120
+ij_continuation_indent_size = 8
+
+[*.py]
+max_line_length = 120
+
+[*.{ts,tsx,js,json,yml,yaml,css,html}]
+indent_size = 2
+
+[Makefile]
+indent_style = tab
+
+[*.md]
+trim_trailing_whitespace = false

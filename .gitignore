@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.idea/
+.vscode/
+.DS_Store
+# scripts/gen_proto.sh 가 생성한다
+src/teecher/
+# mitmproxy CA 개인키 — 절대 커밋 금지
+.mitmproxy/
+# PyInstaller
+build/
+dist/
+*.spec

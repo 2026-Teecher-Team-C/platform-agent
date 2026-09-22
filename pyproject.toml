@@ -1,0 +1,32 @@
+[project]
+name = "platform-agent"
+version = "0.1.0"
+description = "로컬 에이전트 — 다운로드 응답을 붙잡고 검사 서버의 판정을 받아 통과/차단한다"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mitmproxy>=12",
+    "grpcio>=1.75",
+    "protobuf>=6.32",
+]
+
+[dependency-groups]
+dev = [
+    "grpcio-tools>=1.75",
+    "pytest>=8.4",
+    "ruff>=0.13",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["src/teecher", "proto"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

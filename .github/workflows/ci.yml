@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [develop, main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+      - run: uv run --group dev ruff check .
+      - run: uv run --group dev ruff format --check .
+
+  test:
+    # 스풀 보호 규칙은 OS마다 다르다 — 실제 OS에서 검증한다
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+      - run: ./scripts/gen_proto.sh
+      - run: uv run --group dev pytest -q

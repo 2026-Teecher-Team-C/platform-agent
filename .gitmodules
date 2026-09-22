@@ -1,0 +1,3 @@
+[submodule "proto"]
+	path = proto
+	url = https://github.com/2026-Teecher-Team-C/platform-server.git
