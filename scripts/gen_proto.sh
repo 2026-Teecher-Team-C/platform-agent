@@ -10,5 +10,5 @@ fi
 uv run --group dev python -m grpc_tools.protoc \
     -I "$PROTO_ROOT" \
     --python_out=src --pyi_out=src --grpc_python_out=src \
-    $(find "$PROTO_ROOT/teecher/verdict" -name '*.proto')
+    $(find "$PROTO_ROOT/teecher/verdict" "$PROTO_ROOT/teecher/agent" -name '*.proto')
 find src/teecher -type d -exec touch {}/__init__.py \;
