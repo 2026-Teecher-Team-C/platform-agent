@@ -10,6 +10,7 @@
 uv run --group dev pytest
 uv run --group dev ruff check . && uv run --group dev ruff format --check .
 docker compose -f compose.dev.yml up --build # 개발용 프록시 :8080
+uv run mitmdump -s src/addon_entry.py        # 호스트에서 직접. 코드를 고치면 재시작한다(핫 리로드 불가)
 ```
 
 ## 되돌리면 안 되는 결정
