@@ -1,5 +1,9 @@
 # 파이프라인 로직 개발용. 호스트(브라우저)의 프록시를 localhost:8080 으로 지정해서 쓴다.
 # 스풀 보호 규칙·OS 프록시 설정·CA 신뢰 등록은 컨테이너(Linux)로 검증되지 않는다 — 호스트에서 확인할 것.
+# 코드를 고쳤으면 agent를 재시작한다(docker compose restart agent). mitmproxy 핫 리로드는 믿지 않는다.
+#
+# 검사 서버 없이 돌리려면 가짜 VerdictService(EICAR만 차단)를 함께 띄운다:
+#   VERDICT_SERVER_ADDRESS=fake-verdict:9090 docker compose -f compose.dev.yml --profile fake up --build
 name: platform-agent
 
 services:
@@ -7,13 +11,37 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
-    command: ["sh", "-c", "./scripts/gen_proto.sh && /opt/venv/bin/mitmdump --listen-host 0.0.0.0 --listen-port 8080"]
+    command:
+      - sh
+      - -c
+      - ./scripts/gen_proto.sh && /opt/venv/bin/mitmdump -s src/addon_entry.py --listen-host 0.0.0.0 --listen-port 8080
     volumes:
       - .:/app
       # mitmproxy CA. 호스트 신뢰 저장소에 등록할 인증서는 ./.mitmproxy/mitmproxy-ca-cert.pem
       - ./.mitmproxy:/root/.mitmproxy
     environment:
-      # platform-server의 make dev 스택 (nginx)
-      VERDICT_SERVER_ADDRESS: host.docker.internal:80
+      # 기본값은 platform-server의 make dev 스택 (nginx)
+      VERDICT_SERVER_ADDRESS: ${VERDICT_SERVER_ADDRESS:-host.docker.internal:80}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # LAN에 열린 프록시가 되지 않도록 호스트 루프백에만 publish한다
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+    # 프록시 포트가 열렸다 = gen_proto가 끝났다. fake-verdict가 생성 코드를 쓰기 전에 기다리는 기준이다
+    healthcheck:
+      test: ["CMD", "/opt/venv/bin/python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8080), 1)"]
+      interval: 2s
+      retries: 30
+
+  fake-verdict:
+    profiles: [fake]
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    # gen_proto는 agent만 돌린다(같은 bind mount에 동시에 쓰면 반쯤 쓰인 파일을 읽을 수 있다)
+    command: ["/opt/venv/bin/python", "-m", "tests.fakes.verdict_server", "--host", "0.0.0.0", "--port", "9090"]
+    volumes:
+      - .:/app
+    depends_on:
+      agent:
+        condition: service_healthy
