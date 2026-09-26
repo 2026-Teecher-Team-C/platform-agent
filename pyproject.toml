@@ -13,6 +13,7 @@ dependencies = [
 dev = [
     "grpcio-tools>=1.75",
     "pytest>=8.4",
+    "pytest-asyncio>=1.4.0",
     "ruff>=0.13",
 ]
 
@@ -22,6 +23,7 @@ package = false
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 120
