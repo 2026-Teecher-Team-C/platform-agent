@@ -16,7 +16,7 @@ git clone --recurse-submodules https://github.com/2026-Teecher-Team-C/platform-a
 # 이미 clone 했다면: git submodule update --init
 ```
 
-`proto/`는 platform-server 레포를 `proto-v*` 태그로 고정한 submodule이다. 계약 파일은 `proto/proto/teecher/verdict/v1/`.
+`proto/`는 platform-server 레포를 `proto-v*` 태그로 고정한 submodule이다. 원본 파일은 `proto/proto/teecher/verdict/v1/`.
 
 ## 개발
 
