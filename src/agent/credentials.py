@@ -7,7 +7,7 @@
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
@@ -26,7 +26,7 @@ class CredentialStoreError(Exception):
 @dataclass(frozen=True)
 class Credentials:
     agent_id: str
-    agent_token: str
+    agent_token: str = field(repr=False)
     issued_at: datetime  # 에이전트가 토큰을 받은 시각(UTC). 서버는 발급 시각을 주지 않는다
     expires_at: datetime
 

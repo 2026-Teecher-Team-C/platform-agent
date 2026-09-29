@@ -86,3 +86,7 @@ def test_KeyringStore_저장_실패는_CredentialStoreError(fake_keyring):
 def test_make_store():
     assert isinstance(make_store("memory"), MemoryStore)
     assert isinstance(make_store("keyring"), KeyringStore)
+
+
+def test_repr에_토큰이_없다():
+    assert "tok-1" not in repr(creds())
