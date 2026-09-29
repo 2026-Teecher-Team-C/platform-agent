@@ -4,6 +4,7 @@ from datetime import timedelta
 import grpc
 import pytest
 from fakes.verdict_server import create_server
+from google.protobuf.timestamp_pb2 import Timestamp
 from grpc import aio as grpc_aio
 
 from agent.agent_client import AgentClient, AgentServiceError, AgentUnauthenticated
@@ -114,3 +115,11 @@ async def test_서버가_없으면_AgentServiceError():
     with pytest.raises(AgentServiceError):
         await client.heartbeat("t", "0.1.0")
     await channel.close()
+
+
+async def test_범위를_벗어난_만료_시각도_AgentServiceError로_모은다(env, monkeypatch):
+    client, fake = env
+    monkeypatch.setattr(fake, "_issue", lambda: ("tok", Timestamp(seconds=253402300800 * 10)))
+
+    with pytest.raises(AgentServiceError, match="만료 시각"):
+        await client.register(enrollment_token="enroll-ok", identity=IDENTITY)

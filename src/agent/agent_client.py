@@ -26,7 +26,10 @@ class AgentUnauthenticated(AgentServiceError):
 
 def _credentials(agent_id: str, token: str, expires_at: Timestamp) -> Credentials:
     issued_at = datetime.now(UTC)
-    expires = expires_at.ToDatetime(tzinfo=UTC)
+    try:
+        expires = expires_at.ToDatetime(tzinfo=UTC)
+    except (OverflowError, ValueError) as exc:
+        raise AgentServiceError("서버가 쓸 수 없는 만료 시각을 돌려줬다") from exc
     if not agent_id or not token or expires <= issued_at:
         raise AgentServiceError("서버가 쓸 수 없는 자격 증명을 돌려줬다")
     return Credentials(agent_id, token, issued_at, expires)
