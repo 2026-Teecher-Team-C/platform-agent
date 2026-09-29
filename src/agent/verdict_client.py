@@ -5,6 +5,7 @@ grpc.aio 채널은 현재 실행 중인 이벤트 루프에 묶인다. mitmproxy
 """
 
 import asyncio
+from collections.abc import Callable
 
 import grpc
 from grpc import aio as grpc_aio
@@ -36,21 +37,33 @@ class ReportFailed(Exception):
     로그만 남기고 무시한다."""
 
 
+def open_channel(config: Config) -> grpc_aio.Channel:
+    """VerdictService와 AgentService가 같은 주소를 쓴다 — 채널 하나를 공유한다."""
+    if config.verdict_server_tls:
+        return grpc_aio.secure_channel(config.verdict_server_address, grpc.ssl_channel_credentials())
+    return grpc_aio.insecure_channel(config.verdict_server_address)
+
+
 class VerdictClient:
-    def __init__(self, config: Config, channel: grpc_aio.Channel | None = None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        channel: grpc_aio.Channel | None = None,
+        token: Callable[[], str] | None = None,
+    ) -> None:
         self._config = config
-        if channel is not None:
-            self._channel = channel
-        elif config.verdict_server_tls:
-            self._channel = grpc_aio.secure_channel(config.verdict_server_address, grpc.ssl_channel_credentials())
-        else:
-            self._channel = grpc_aio.insecure_channel(config.verdict_server_address)
+        # 주입된 채널은 주인(HoldPipeline)이 닫는다.
+        self._owns_channel = channel is None
+        self._channel = channel if channel is not None else open_channel(config)
         self._stub = verdict_pb2_grpc.VerdictServiceStub(self._channel)
+        # 토큰은 AgentLifecycle이 갱신하므로 호출할 때마다 다시 읽는다.
+        self._token = token or (lambda: config.agent_token)
 
     def _metadata(self) -> list[tuple[str, str]] | None:
-        if not self._config.agent_token:
+        token = self._token()
+        if not token:
             return None
-        return [("authorization", f"Bearer {self._config.agent_token}")]
+        return [("authorization", f"Bearer {token}")]
 
     async def check_hash(self, sha256: str, file_size: int) -> verdict_pb2.CheckHashResponse:
         request = verdict_pb2.CheckHashRequest(sha256=sha256, file_size=file_size)
@@ -127,4 +140,5 @@ class VerdictClient:
             raise ReportFailed(f"ReportEvent 실패: {exc}") from exc
 
     async def close(self) -> None:
-        await self._channel.close()
+        if self._owns_channel:
+            await self._channel.close()

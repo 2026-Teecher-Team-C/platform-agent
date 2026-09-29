@@ -13,7 +13,7 @@ from mitmproxy.test import taddons, tflow, tutils
 
 from agent import addon as addon_module
 from agent.addon import ENCODED_DOWNLOAD_REASON, HOLD_KEY, PASSTHROUGH_KEY, HoldPipeline
-from agent.verdict_client import ReportFailed
+from agent.verdict_client import ReportFailed, VerdictUnavailable
 from teecher.verdict.v1 import verdict_pb2
 
 CLEAN_BODY = b"clean installer bytes " * 100
@@ -62,6 +62,7 @@ async def pipeline_factory(monkeypatch):
     def _make(port: int, hold_timeout: float = 5) -> HoldPipeline:
         monkeypatch.setenv("VERDICT_SERVER_ADDRESS", f"127.0.0.1:{port}")
         monkeypatch.setenv("HOLD_TIMEOUT_SECONDS", str(hold_timeout))
+        monkeypatch.setenv("CREDENTIAL_STORE", "memory")
         pipeline = HoldPipeline()
         # ctx.options를 세운다. body_size_limit 등 옵션은 Proxyserver가 등록한다
         taddons.context(Proxyserver(), pipeline)
@@ -455,3 +456,36 @@ async def test_비다운로드_오류는_보고하지_않는다(fake_server, pip
     await pipeline.drain_reports()
 
     assert servicer.report_events == []
+
+
+async def test_등록한_토큰으로_판정_RPC를_호출하고_하트비트를_보낸다(fake_server, pipeline_factory, monkeypatch):
+    port, servicer = fake_server
+    monkeypatch.setenv("ENROLLMENT_TOKEN", "enroll-ok")
+    pipeline = pipeline_factory(port)
+    await pipeline.wait_started()
+    [token] = servicer.agent.valid_tokens
+
+    await run_flow(pipeline, make_flow(CLEAN_BODY))
+
+    assert servicer.last_metadata.get("authorization") == f"Bearer {token}"
+    assert servicer.agent.heartbeats == [(token, "0.1.0")]
+    assert servicer.agent.policy_calls == 1
+
+
+async def test_자격_증명이_없으면_다운로드는_fail_close로_막힌다(fake_server, pipeline_factory, monkeypatch):
+    # 가짜 VerdictService는 토큰을 검사하지 않으므로, 실서버의 UNAUTHENTICATED를 흉내 낸다
+    port, servicer = fake_server
+    monkeypatch.delenv("ENROLLMENT_TOKEN", raising=False)
+    pipeline = pipeline_factory(port)
+    await pipeline.wait_started()
+
+    async def unauthenticated(*args, **kwargs):
+        raise VerdictUnavailable("UNAUTHENTICATED")
+
+    monkeypatch.setattr(pipeline.client, "check_hash", unauthenticated)
+    flow = make_flow(CLEAN_BODY)
+
+    await run_flow(pipeline, flow)
+
+    assert pipeline.lifecycle.token() == ""
+    assert flow.response.status_code == 403

@@ -13,12 +13,17 @@ import uuid
 from dataclasses import dataclass
 
 from google.protobuf.timestamp_pb2 import Timestamp
+from grpc import aio as grpc_aio
 from mitmproxy import ctx, exceptions, http
 
+from agent.agent_client import AgentClient
 from agent.config import Config
+from agent.credentials import make_store
 from agent.detection import filename_of, is_download
 from agent.held_body import HeldBody, held_body_of
-from agent.verdict_client import VerdictClient
+from agent.identity import current_identity
+from agent.lifecycle import AgentLifecycle
+from agent.verdict_client import VerdictClient, open_channel
 from teecher.verdict.v1 import verdict_pb2
 
 logger = logging.getLogger(__name__)
@@ -104,6 +109,9 @@ class HoldPipeline:
     def __init__(self) -> None:
         self.config: Config | None = None
         self.client: VerdictClient | None = None
+        self.lifecycle: AgentLifecycle | None = None
+        self._channel: grpc_aio.Channel | None = None
+        self._lifecycle_task: asyncio.Task | None = None
         self._started = False
         self._report_tasks: set[asyncio.Task] = set()
 
@@ -118,7 +126,16 @@ class HoldPipeline:
         self.config = Config.from_env()
         ctx.options.update(body_size_limit=self.config.body_size_limit)
         # grpc.aio 채널은 실행 중인 루프에 묶인다 — running() 안에서 만든다.
-        self.client = VerdictClient(self.config)
+        self._channel = open_channel(self.config)
+        self.lifecycle = AgentLifecycle(
+            self.config,
+            AgentClient(self._channel, self.config.rpc_timeout_seconds),
+            make_store(self.config.credential_store),
+            current_identity(),
+        )
+        self.client = VerdictClient(self.config, self._channel, token=self.lifecycle.token)
+        # 등록·정책 수신은 기동을 막지 않는다. 끝나기 전의 다운로드는 토큰 없음(fail-close)·바이패스 없음이다.
+        self._lifecycle_task = asyncio.create_task(self.lifecycle.start())
         self._started = True
         logger.info(
             "보류 파이프라인 시작: server=%s body_size_limit=%s hold_timeout=%ss",
@@ -137,9 +154,21 @@ class HoldPipeline:
             raise exceptions.OptionsError("body_size_limit을 해제할 수 없다")
 
     async def done(self) -> None:
+        if self._lifecycle_task is not None:
+            self._lifecycle_task.cancel()
+            await asyncio.gather(self._lifecycle_task, return_exceptions=True)
+        if self.lifecycle is not None:
+            await self.lifecycle.stop()
         await self.drain_reports()
         if self.client is not None:
             await self.client.close()
+        if self._channel is not None:
+            await self._channel.close()
+
+    async def wait_started(self) -> None:
+        """AgentLifecycle.start()가 끝날 때까지 기다린다. 테스트에서 쓴다."""
+        if self._lifecycle_task is not None:
+            await self._lifecycle_task
 
     async def drain_reports(self) -> None:
         """진행 중인 ReportEvent를 기다린다. 종료 시와 테스트에서 쓴다."""
