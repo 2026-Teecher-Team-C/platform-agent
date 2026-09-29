@@ -39,3 +39,23 @@ def test_현재_호스트_정보는_예외_없이_채워진다():
     assert identity.hostname
     assert identity.agent_version == agent.__version__
     assert isinstance(identity.hardware_uuid, str)  # 얻지 못하면 "" — 서버는 재설치 매칭 후보로만 쓴다
+
+
+def test_리눅스_hardware_uuid는_디코딩_실패에도_빈_문자열(monkeypatch):
+    from agent.platform import linux
+
+    def bad_read(self, *args, **kwargs):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad")
+
+    monkeypatch.setattr(Path, "read_text", bad_read)
+
+    assert linux.hardware_uuid() == ""
+
+
+def test_hardware_uuid가_예외를_던져도_current_identity는_돌아온다(monkeypatch):
+    def boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("agent.identity.hardware_uuid", boom)
+
+    assert current_identity().hardware_uuid == ""

@@ -9,7 +9,7 @@ def hardware_uuid() -> str:
     # 보통 root만 읽을 수 있다. 못 읽으면 빈 문자열.
     try:
         return Path("/sys/class/dmi/id/product_uuid").read_text().strip()
-    except OSError:
+    except (OSError, ValueError):  # UnicodeDecodeError도 ValueError
         return ""
 
 

@@ -32,4 +32,8 @@ def current_identity() -> AgentIdentity:
         hostname = socket.gethostname()
     except OSError:
         hostname = ""
-    return AgentIdentity(hostname, os_platform_of(sys.platform), __version__, hardware_uuid())
+    try:
+        uuid = hardware_uuid()
+    except Exception:
+        uuid = ""
+    return AgentIdentity(hostname, os_platform_of(sys.platform), __version__, uuid)
