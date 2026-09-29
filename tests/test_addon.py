@@ -63,6 +63,7 @@ async def pipeline_factory(monkeypatch):
         monkeypatch.setenv("VERDICT_SERVER_ADDRESS", f"127.0.0.1:{port}")
         monkeypatch.setenv("HOLD_TIMEOUT_SECONDS", str(hold_timeout))
         monkeypatch.setenv("CREDENTIAL_STORE", "memory")
+        monkeypatch.delenv("AGENT_TOKEN", raising=False)
         pipeline = HoldPipeline()
         # ctx.options를 세운다. body_size_limit 등 옵션은 Proxyserver가 등록한다
         taddons.context(Proxyserver(), pipeline)

@@ -86,6 +86,7 @@ async def proxy(tmp_path, monkeypatch):
     monkeypatch.setenv("VERDICT_SERVER_ADDRESS", f"127.0.0.1:{fake_port}")
     monkeypatch.setenv("BODY_SIZE_LIMIT", "64k")
     monkeypatch.setenv("CREDENTIAL_STORE", "memory")
+    monkeypatch.delenv("AGENT_TOKEN", raising=False)
 
     master = DumpMaster(options.Options(), with_termlog=False, with_dumper=False)
     pipeline = HoldPipeline()
