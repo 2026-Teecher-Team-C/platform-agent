@@ -23,7 +23,7 @@ from agent.detection import filename_of, is_download
 from agent.held_body import HeldBody, held_body_of
 from agent.identity import current_identity
 from agent.lifecycle import AgentLifecycle
-from agent.policy import EMPTY_POLICY, Policy
+from agent.policy import EMPTY_POLICY, Policy, normalize_host
 from agent.verdict_client import VerdictClient, open_channel
 from teecher.agent.v1 import agent_pb2
 from teecher.verdict.v1 import verdict_pb2
@@ -119,7 +119,9 @@ def _content_length(headers) -> int:
 
 
 def _connect_host(flow: http.HTTPFlow) -> str:
-    # 실제로 연결한 대상. Host 헤더는 클라이언트가 임의로 적을 수 있다(설계 system-flow 156행).
+    # 일반 모드에서 mitmproxy는 request.host로 연결한다(평문 HTTP는 Host 헤더에서 나온다). 그래서 호스트만으로는
+    # 아무것도 인증되지 않고, 바이패스는 HTTPS이고 업스트림 인증서가 이 호스트와 같은 SNI로 검증됐을 때만 믿는다.
+    # request.host 일치 검사는 이중 방어다.
     address = flow.server_conn.address if flow.server_conn else None
     return address[0] if address else ""
 
@@ -216,6 +218,12 @@ class HoldPipeline:
 
     def _bypass_category(self, flow: http.HTTPFlow) -> int | None:
         policy = self._policy()
+        server_conn = flow.server_conn
+        # 평문 HTTP이거나 인증서 검증 없는 연결이면 호스트 이름이 아무것도 증명하지 못한다.
+        if flow.request.scheme != "https" or not server_conn or not server_conn.tls:
+            return None
+        if normalize_host(server_conn.sni or "") != normalize_host(_connect_host(flow)):
+            return None
         category = policy.bypass_category(_connect_host(flow))
         # 연결 대상과 요청 호스트가 둘 다 같은 바이패스 호스트일 때만 인정한다.
         if category is None or policy.bypass_category(flow.request.host) != category:

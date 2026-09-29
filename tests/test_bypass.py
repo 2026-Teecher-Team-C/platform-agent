@@ -45,7 +45,10 @@ async def pipeline(monkeypatch):
 
 def at_host(flow, host: str, connect_host: str | None = None):
     flow.request.host = host
+    flow.request.scheme = "https"
     flow.server_conn.address = (connect_host or host, 443)
+    flow.server_conn.tls = True
+    flow.server_conn.sni = connect_host or host
     return flow
 
 
@@ -116,8 +119,32 @@ async def test_정책을_받기_전에는_바이패스하지_않는다(monkeypat
     p.responseheaders(flow)
 
     assert flow.response.stream is False
+    assert HOLD_KEY in flow.metadata
     await p.done()
     await server.stop(None)
+
+
+async def test_평문_HTTP는_바이패스_호스트여도_보류한다(pipeline):
+    p, _ = pipeline
+    flow = at_host(make_flow(CLEAN_BODY), "dl.google.com")
+    flow.request.scheme = "http"
+    flow.server_conn.tls = False
+
+    p.responseheaders(flow)
+
+    assert flow.response.stream is False
+    assert HOLD_KEY in flow.metadata
+
+
+async def test_SNI가_연결_대상과_다르면_보류한다(pipeline):
+    p, _ = pipeline
+    flow = at_host(make_flow(CLEAN_BODY), "dl.google.com")
+    flow.server_conn.sni = "evil.example"
+
+    p.responseheaders(flow)
+
+    assert flow.response.stream is False
+    assert HOLD_KEY in flow.metadata
 
 
 def clienthello(connect_host: str | None, sni: str | None):
