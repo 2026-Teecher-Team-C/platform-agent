@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -90,3 +91,19 @@ def test_make_store():
 
 def test_repr에_토큰이_없다():
     assert "tok-1" not in repr(creds())
+
+
+def test_시간대_없는_시각은_깨진_항목으로_본다(fake_keyring):
+    raw = json.dumps(
+        {
+            "agent_id": "a",
+            "agent_token": "t",
+            "issued_at": "2026-09-29T00:00:00",
+            "expires_at": "2026-09-30T00:00:00",
+        }
+    )
+    with pytest.raises(ValueError):
+        Credentials.from_json(raw)
+    fake_keyring.data[("teecher-agent", "credentials")] = raw
+
+    assert KeyringStore().load() is None

@@ -46,11 +46,15 @@ class Credentials:
     @staticmethod
     def from_json(raw: str) -> "Credentials":
         data = json.loads(raw)
+        issued_at = datetime.fromisoformat(data["issued_at"])
+        expires_at = datetime.fromisoformat(data["expires_at"])
+        if issued_at.tzinfo is None or expires_at.tzinfo is None:
+            raise ValueError("시간대 없는 시각")
         return Credentials(
             agent_id=data["agent_id"],
             agent_token=data["agent_token"],
-            issued_at=datetime.fromisoformat(data["issued_at"]),
-            expires_at=datetime.fromisoformat(data["expires_at"]),
+            issued_at=issued_at,
+            expires_at=expires_at,
         )
 
 
