@@ -11,7 +11,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
-from agent.agent_client import AgentClient, AgentServiceError
+from agent.agent_client import AgentClient, AgentServiceError, AgentUnauthenticated
 from agent.config import Config
 from agent.credentials import Credentials, CredentialStore, CredentialStoreError
 from agent.identity import AgentIdentity
@@ -36,6 +36,7 @@ class AgentLifecycle:
         self._identity = identity
         self._clock = clock or (lambda: datetime.now(UTC))
         self._creds: Credentials | None = None
+        self._rejected_token = ""
         self._policy: Policy = EMPTY_POLICY
         self._tasks: list[asyncio.Task] = []
 
@@ -49,9 +50,11 @@ class AgentLifecycle:
         return self._policy
 
     async def start(self) -> None:
-        await self._ensure_credentials()
-        await self.refresh_policy_once()
-        await self.heartbeat_once()
+        for step in (self._ensure_credentials, self.refresh_policy_once, self.heartbeat_once):
+            try:
+                await step()
+            except Exception:
+                logger.exception("시작 단계 실패 (%s) — 주기 작업이 다시 시도한다", step.__name__)
         self._tasks = [
             asyncio.create_task(self._every(self._config.heartbeat_interval_seconds, self.tick)),
             asyncio.create_task(self._every(self._config.policy_refresh_seconds, self.refresh_policy_once)),
@@ -88,6 +91,11 @@ class AgentLifecycle:
         except Exception:
             logger.exception("자격 증명 로드 실패")
             self._creds = None
+        if self._creds is not None and (
+            self._creds.agent_token == self._rejected_token or self._creds.expires_at <= self._clock()
+        ):
+            logger.warning("저장된 자격 증명이 거부됐거나 만료됐다 — 다시 등록한다")
+            self._creds = None
         if self._creds is not None:
             return
         if not self._config.enrollment_token:
@@ -108,12 +116,22 @@ class AgentLifecycle:
         except CredentialStoreError as exc:
             logger.error("자격 증명 저장 실패 — 이번 실행 동안은 메모리의 토큰을 쓴다: %s", exc)
 
+    def _reject(self, token: str, operation: str) -> None:
+        if self._config.agent_token:
+            logger.warning("%s: 수동 AGENT_TOKEN이 거부됐다", operation)
+            return
+        logger.warning("%s: 서버가 토큰을 거부했다 — 다음 주기에 다시 등록한다", operation)
+        self._rejected_token = token
+        self._creds = None
+
     async def heartbeat_once(self) -> None:
         token = self.token()
         if not token:
             return
         try:
             await self._client.heartbeat(token, self._identity.agent_version)
+        except AgentUnauthenticated:
+            self._reject(token, "하트비트")
         except AgentServiceError as exc:
             logger.warning("하트비트 실패: %s", exc)
 
@@ -124,6 +142,9 @@ class AgentLifecycle:
             return
         try:
             creds = await self._client.refresh_token(self._creds)
+        except AgentUnauthenticated:
+            self._reject(self._creds.agent_token, "토큰 갱신")
+            return
         except AgentServiceError as exc:
             logger.warning("토큰 갱신 실패 — 기존 토큰을 만료까지 쓴다: %s", exc)
             return

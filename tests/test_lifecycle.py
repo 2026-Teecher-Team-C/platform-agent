@@ -8,7 +8,7 @@ from grpc import aio as grpc_aio
 
 from agent.agent_client import AgentClient
 from agent.config import Config
-from agent.credentials import CredentialStoreError, MemoryStore
+from agent.credentials import Credentials, CredentialStoreError, MemoryStore
 from agent.identity import AgentIdentity
 from agent.lifecycle import AgentLifecycle
 from agent.policy import EMPTY_POLICY
@@ -189,3 +189,56 @@ async def test_stop하면_주기_작업이_멈춘다(env):
     await asyncio.sleep(0.15)
 
     assert len(fake.heartbeats) == count
+
+
+class RaisingSaveStore(MemoryStore):
+    def save(self, creds):
+        raise RuntimeError("boom")
+
+
+async def test_start는_예상하지_못한_예외에도_던지지_않고_주기_작업을_만든다(env):
+    make, fake = env
+    lifecycle = make(store=RaisingSaveStore(), enrollment_token="enroll-ok", heartbeat_interval_seconds=0.05)
+
+    await lifecycle.start()
+
+    assert lifecycle._tasks and not any(task.done() for task in lifecycle._tasks)
+
+
+async def test_서버가_거부한_저장_토큰은_다음_주기에_재등록으로_복구한다(env):
+    make, fake = env
+    now = datetime.now(UTC)
+    store = MemoryStore()
+    store.save(Credentials("agent-x", "dead", now, now + timedelta(hours=24)))
+    lifecycle = make(store=store, enrollment_token="enroll-ok")
+
+    await lifecycle.start()
+    assert lifecycle.token() == ""
+
+    await lifecycle.tick()
+
+    assert lifecycle.token() in fake.valid_tokens
+    assert store.load().agent_token == lifecycle.token()
+
+
+async def test_이미_만료된_저장_자격_증명은_쓰지_않고_등록한다(env):
+    make, fake = env
+    now = datetime.now(UTC)
+    store = MemoryStore()
+    store.save(Credentials("agent-x", "old", now - timedelta(hours=48), now - timedelta(hours=24)))
+    lifecycle = make(store=store, enrollment_token="enroll-ok")
+
+    await lifecycle.start()
+
+    assert len(fake.registrations) == 1
+    assert lifecycle.token() in fake.valid_tokens
+
+
+async def test_수동_AGENT_TOKEN은_인증_거부에도_지워지지_않는다(env):
+    make, fake = env
+    lifecycle = make(agent_token="manual", enrollment_token="enroll-ok")
+
+    await lifecycle.start()
+    await lifecycle.heartbeat_once()
+
+    assert lifecycle.token() == "manual"
