@@ -95,9 +95,11 @@ def is_download(request_headers: Mapping[str, str], response_headers: Mapping[st
         cd_trusted = False
         cors_only_mime = False
     else:
-        # Sec-Fetch 헤더 없음 — 비브라우저 클라이언트/평문 HTTP 오리진. 기존 규칙으로 폴백
+        # Sec-Fetch 헤더 없음 — 비브라우저 클라이언트/평문 HTTP 오리진. 기존 규칙으로 폴백.
+        # 브라우저 내부 서비스(Chrome 네트워크 시간 확인 등)도 Sec-Fetch 없이 이 경로를 타며 JSON에
+        # anti-XSSI용 CD를 붙이므로, JSON의 CD는 믿지 않는다 (#5)
         context = "fallback"
-        cd_trusted = True
+        cd_trusted = mime != "application/json"
         cors_only_mime = False
 
     if cors_only_mime:

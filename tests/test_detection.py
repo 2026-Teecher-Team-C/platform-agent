@@ -50,6 +50,30 @@ MB = 1024 * KB
             DownloadCheck(True, "fallback", "mime"),
             id="no_sec-fetch+octet-stream",
         ),
+        # 폴백 + JSON — Chrome 네트워크 시간 요청(clients2.google.com/time)의 anti-XSSI 첨부 (#5)
+        pytest.param(
+            {},
+            {
+                "Content-Type": "application/json; charset=utf-8",
+                "Content-Disposition": "attachment; filename=\"json.txt\"; filename*=UTF-8''json.txt",
+                "Content-Encoding": "gzip",
+            },
+            DownloadCheck(False, "fallback", ""),
+            id="no_sec-fetch+CD_attachment+json_아님",
+        ),
+        # JSON 제외는 폴백 한정 — text/plain 첨부는 여전히 다운로드, navigate는 그대로 CD 신뢰
+        pytest.param(
+            {},
+            {"Content-Disposition": "attachment; filename=a.txt", "Content-Type": "text/plain"},
+            DownloadCheck(True, "fallback", "content_disposition"),
+            id="no_sec-fetch+CD_attachment+text_plain",
+        ),
+        pytest.param(
+            {"Sec-Fetch-Mode": "navigate"},
+            {"Content-Disposition": "attachment; filename=a.json", "Content-Type": "application/json"},
+            DownloadCheck(True, "navigate", "content_disposition"),
+            id="navigate+CD_attachment+json",
+        ),
         # 크기 폴백 제외 MIME — Content-Length가 커도 다운로드 아님
         pytest.param(
             {"Sec-Fetch-Mode": "navigate"},
