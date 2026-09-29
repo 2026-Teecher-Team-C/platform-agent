@@ -1,0 +1,140 @@
+"""에이전트 생명주기 — 자격 증명 확보(키체인 로드 또는 등록), 하트비트, 토큰 갱신, 정책 갱신.
+
+판정 경로와 분리돼 있고, 여기서 무엇이 실패해도 다운로드는 막히는 쪽으로만 간다:
+- 토큰이 없으면 VerdictService가 UNAUTHENTICATED를 돌려주고 VerdictClient가 fail-close로 차단한다
+- 정책을 한 번도 못 받았으면 EMPTY_POLICY(바이패스 없음) — 모든 다운로드를 검사한다
+어떤 메서드도 예외를 밖으로 던지지 않는다. 실패는 로그로 남기고 다음 주기에 다시 시도한다.
+"""
+
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+
+from agent.agent_client import AgentClient, AgentServiceError
+from agent.config import Config
+from agent.credentials import Credentials, CredentialStore, CredentialStoreError
+from agent.identity import AgentIdentity
+from agent.policy import EMPTY_POLICY, Policy
+
+logger = logging.getLogger(__name__)
+
+
+class AgentLifecycle:
+    def __init__(
+        self,
+        config: Config,
+        client: AgentClient,
+        store: CredentialStore,
+        identity: AgentIdentity,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._config = config
+        self._client = client
+        self._store = store
+        self._identity = identity
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._creds: Credentials | None = None
+        self._policy: Policy = EMPTY_POLICY
+        self._tasks: list[asyncio.Task] = []
+
+    def token(self) -> str:
+        if self._config.agent_token:
+            return self._config.agent_token
+        return self._creds.agent_token if self._creds else ""
+
+    @property
+    def policy(self) -> Policy:
+        return self._policy
+
+    async def start(self) -> None:
+        await self._ensure_credentials()
+        await self.refresh_policy_once()
+        await self.heartbeat_once()
+        self._tasks = [
+            asyncio.create_task(self._every(self._config.heartbeat_interval_seconds, self.tick)),
+            asyncio.create_task(self._every(self._config.policy_refresh_seconds, self.refresh_policy_once)),
+        ]
+
+    async def stop(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks = []
+
+    async def tick(self) -> None:
+        """하트비트 주기마다: 자격 증명이 없으면 다시 확보, 갱신 시점이면 갱신, 그리고 하트비트."""
+        if not self.token():
+            await self._ensure_credentials()
+            if self.token():
+                await self.refresh_policy_once()
+        await self.refresh_token_if_due()
+        await self.heartbeat_once()
+
+    async def _every(self, interval: float, fn: Callable[[], Awaitable[None]]) -> None:
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await fn()
+            except Exception:
+                logger.exception("주기 작업 실패 — 다음 주기에 다시 시도한다")
+
+    async def _ensure_credentials(self) -> None:
+        if self._config.agent_token:
+            return
+        try:
+            self._creds = await asyncio.to_thread(self._store.load)
+        except Exception:
+            logger.exception("자격 증명 로드 실패")
+            self._creds = None
+        if self._creds is not None:
+            return
+        if not self._config.enrollment_token:
+            logger.error("자격 증명이 없고 ENROLLMENT_TOKEN도 없다 — 모든 다운로드가 fail-close로 차단된다")
+            return
+        try:
+            creds = await self._client.register(enrollment_token=self._config.enrollment_token, identity=self._identity)
+        except AgentServiceError as exc:
+            logger.error("에이전트 등록 실패: %s", exc)
+            return
+        self._creds = creds
+        logger.info("에이전트 등록 완료: agent_id=%s", creds.agent_id)
+        await self._save(creds)
+
+    async def _save(self, creds: Credentials) -> None:
+        try:
+            await asyncio.to_thread(self._store.save, creds)
+        except CredentialStoreError as exc:
+            logger.error("자격 증명 저장 실패 — 이번 실행 동안은 메모리의 토큰을 쓴다: %s", exc)
+
+    async def heartbeat_once(self) -> None:
+        token = self.token()
+        if not token:
+            return
+        try:
+            await self._client.heartbeat(token, self._identity.agent_version)
+        except AgentServiceError as exc:
+            logger.warning("하트비트 실패: %s", exc)
+
+    async def refresh_token_if_due(self) -> None:
+        if self._config.agent_token or self._creds is None:
+            return
+        if not self._creds.refresh_due(self._clock()):
+            return
+        try:
+            creds = await self._client.refresh_token(self._creds)
+        except AgentServiceError as exc:
+            logger.warning("토큰 갱신 실패 — 기존 토큰을 만료까지 쓴다: %s", exc)
+            return
+        self._creds = creds
+        await self._save(creds)
+
+    async def refresh_policy_once(self) -> None:
+        token = self.token()
+        if not token:
+            return
+        try:
+            self._policy = await self._client.get_policy(token)
+        except AgentServiceError as exc:
+            logger.warning("정책 수신 실패 — 마지막으로 받은 정책을 유지한다: %s", exc)
