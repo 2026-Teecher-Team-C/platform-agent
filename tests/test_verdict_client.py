@@ -7,6 +7,7 @@ from fakes.verdict_server import EICAR_BODY, EICAR_SHA256, create_server
 from grpc import aio as grpc_aio
 
 from agent.config import Config
+from agent.held_body import MemoryBody
 from agent.verdict_client import CHUNK_SIZE, ReportFailed, VerdictClient, VerdictUnavailable
 from teecher.verdict.v1 import verdict_pb2, verdict_pb2_grpc
 
@@ -63,7 +64,7 @@ async def test_미확인_해시는_UNKNOWN이고_이후_submit_file로_판정한
         filename="a.txt",
         mime_type="text/plain",
         event_id="e1",
-        body=b"hello world",
+        body=MemoryBody(b"hello world"),
         timeout=5,
     )
     assert clean.decision == verdict_pb2.DECISION_ALLOW
@@ -74,7 +75,7 @@ async def test_미확인_해시는_UNKNOWN이고_이후_submit_file로_판정한
         filename="eicar.com",
         mime_type="application/octet-stream",
         event_id="e2",
-        body=EICAR_BODY,
+        body=MemoryBody(EICAR_BODY),
         timeout=5,
     )
     assert blocked.decision == verdict_pb2.DECISION_BLOCK
@@ -92,7 +93,7 @@ async def test_64KiB_초과_본문은_여러_청크로_전송되고_그대로_�
         filename="big.bin",
         mime_type="application/octet-stream",
         event_id="e3",
-        body=body,
+        body=MemoryBody(body),
         timeout=5,
     )
 
@@ -127,7 +128,7 @@ async def test_SubmitFile_지연이_타임아웃보다_길면_VerdictUnavailable
             filename="a",
             mime_type="text/plain",
             event_id="e",
-            body=b"data",
+            body=MemoryBody(b"data"),
             timeout=0.2,
         )
 
@@ -198,12 +199,25 @@ async def test_SubmitFile이_UNKNOWN을_반환하면_VerdictUnavailable(fake_ser
             filename="a",
             mime_type="text/plain",
             event_id="e",
-            body=b"data",
+            body=MemoryBody(b"data"),
             timeout=5,
         )
 
 
-async def test_body가_bytes가_아니면_VerdictUnavailable(fake_server, client_factory):
+class FailingBody:
+    """첫 청크 뒤 읽기가 실패하는 본문 — 스풀 I/O 오류 흉내."""
+
+    size = 128
+
+    async def sha256(self) -> str:
+        return "0" * 64
+
+    async def chunks(self, chunk_size):
+        yield b"x" * 64
+        raise OSError("spool read failed")
+
+
+async def test_본문_읽기가_실패하면_VerdictUnavailable(fake_server, client_factory):
     port, _ = fake_server
     client = client_factory(Config(verdict_server_address=f"127.0.0.1:{port}"))
 
@@ -214,7 +228,7 @@ async def test_body가_bytes가_아니면_VerdictUnavailable(fake_server, client
             filename="a",
             mime_type="text/plain",
             event_id="e",
-            body="str",
+            body=FailingBody(),
             timeout=5,
         )
 
