@@ -1,8 +1,33 @@
+import re
+import subprocess
 from pathlib import Path
 
 from agent.platform.base import create_spool_dir, create_spool_file
 
-__all__ = ["create_spool_file", "prepare_spool_dir"]
+__all__ = ["create_spool_file", "hardware_uuid", "prepare_spool_dir"]
+
+_IOREG_UUID = re.compile(r'"IOPlatformUUID"\s*=\s*"([^"]+)"')
+
+
+def parse_ioreg(output: str) -> str:
+    match = _IOREG_UUID.search(output)
+    return match.group(1) if match else ""
+
+
+def hardware_uuid() -> str:
+    # 위조 가능한 값이라 서버는 식별 근거가 아닌 재설치 매칭 후보로만 쓴다. 못 얻으면 빈 문자열.
+    try:
+        result = subprocess.run(
+            ["/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except Exception:
+        return ""
+    return parse_ioreg(result.stdout)
+
 
 # 이 파일이 있는 디렉터리는 Spotlight가 색인하지 않는다.
 SPOTLIGHT_EXCLUSION_MARKER = ".metadata_never_index"

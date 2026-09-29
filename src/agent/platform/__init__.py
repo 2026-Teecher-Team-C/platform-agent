@@ -9,10 +9,10 @@ import sys
 from agent.platform.base import SpoolFile
 
 if sys.platform == "darwin":
-    from agent.platform.macos import create_spool_file, prepare_spool_dir
+    from agent.platform.macos import create_spool_file, hardware_uuid, prepare_spool_dir
 elif sys.platform == "win32":
-    from agent.platform.windows import create_spool_file, prepare_spool_dir
+    from agent.platform.windows import create_spool_file, hardware_uuid, prepare_spool_dir
 else:
-    from agent.platform.linux import create_spool_file, prepare_spool_dir
+    from agent.platform.linux import create_spool_file, hardware_uuid, prepare_spool_dir
 
-__all__ = ["SpoolFile", "create_spool_file", "prepare_spool_dir"]
+__all__ = ["SpoolFile", "create_spool_file", "hardware_uuid", "prepare_spool_dir"]
