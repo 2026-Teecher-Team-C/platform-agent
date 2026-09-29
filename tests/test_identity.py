@@ -28,7 +28,7 @@ def test_OS_이름을_proto_값으로_바꾼다():
 
 
 def test_버전은_pyproject와_같다():
-    pyproject = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert agent.__version__ == pyproject["project"]["version"]
 
