@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from google.protobuf.timestamp_pb2 import Timestamp
 from grpc import aio as grpc_aio
-from mitmproxy import ctx, exceptions, http
+from mitmproxy import ctx, exceptions, http, tls
 
 from agent.agent_client import AgentClient
 from agent.config import Config
@@ -23,7 +23,9 @@ from agent.detection import filename_of, is_download
 from agent.held_body import HeldBody, held_body_of
 from agent.identity import current_identity
 from agent.lifecycle import AgentLifecycle
+from agent.policy import EMPTY_POLICY, Policy
 from agent.verdict_client import VerdictClient, open_channel
+from teecher.agent.v1 import agent_pb2
 from teecher.verdict.v1 import verdict_pb2
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,10 @@ PASSTHROUGH_KEY = "agent.passthrough"
 # Config 파싱 전에 먼저 거는 안전한 기본값. 파싱에 성공하면 config.body_size_limit으로 바꾼다.
 SAFE_BODY_SIZE_LIMIT = "500m"
 ENCODED_DOWNLOAD_REASON = "encoded download unsupported"
+BYPASS_REASONS = {
+    agent_pb2.BYPASS_CATEGORY_PINNED: "pinned host bypass",
+    agent_pb2.BYPASS_CATEGORY_SECURITY_UPDATE: "security update bypass",
+}
 
 
 @dataclass
@@ -103,6 +109,19 @@ def _timestamp(seconds: float) -> Timestamp:
     ts = Timestamp()
     ts.FromNanoseconds(int(seconds * 1e9))
     return ts
+
+
+def _content_length(headers) -> int:
+    try:
+        return max(int(headers.get("content-length", "0")), 0)
+    except ValueError:
+        return 0
+
+
+def _connect_host(flow: http.HTTPFlow) -> str:
+    # 실제로 연결한 대상. Host 헤더는 클라이언트가 임의로 적을 수 있다(설계 system-flow 156행).
+    address = flow.server_conn.address if flow.server_conn else None
+    return address[0] if address else ""
 
 
 class HoldPipeline:
@@ -179,7 +198,58 @@ class HoldPipeline:
         # 요청 본문은 보지 않는다. 버퍼링하면 업로드가 메모리에 쌓이고 body_size_limit에 걸려 413이 난다.
         flow.request.stream = True
 
+    def _policy(self) -> Policy:
+        return self.lifecycle.policy if self.lifecycle is not None else EMPTY_POLICY
+
+    def tls_clienthello(self, data: tls.ClientHelloData) -> None:
+        # 인증서를 고정한 앱은 가로채면 연결이 깨진다 — TLS를 풀지 않고 그대로 흘려보낸다.
+        # 호스트는 CONNECT 대상(실제 연결할 곳)만 본다. SNI는 클라이언트가 임의로 적을 수 있다.
+        try:
+            address = data.context.server.address
+            host = address[0] if address else ""
+            if host and self._policy().bypass_category(host) == agent_pb2.BYPASS_CATEGORY_PINNED:
+                data.ignore_connection = True
+                logger.info("PINNED 바이패스: %s", host)
+        except Exception:
+            # 판단에 실패하면 가로챈다(검사하는 쪽).
+            logger.exception("PINNED 바이패스 판단 실패")
+
+    def _bypass_category(self, flow: http.HTTPFlow) -> int | None:
+        policy = self._policy()
+        category = policy.bypass_category(_connect_host(flow))
+        # 연결 대상과 요청 호스트가 둘 다 같은 바이패스 호스트일 때만 인정한다.
+        if category is None or policy.bypass_category(flow.request.host) != category:
+            return None
+        return category
+
+    def _bypass(self, flow: http.HTTPFlow, category: int) -> None:
+        flow.metadata[PASSTHROUGH_KEY] = True
+        flow.response.stream = True
+        try:
+            if not is_download(flow.request.headers, flow.response.headers).is_download:
+                return
+            hold = _snapshot(flow)
+            hold.file_size = _content_length(flow.response.headers)
+            self._schedule_report(
+                hold,
+                Outcome(
+                    verdict_pb2.FINAL_DECISION_BYPASSED,
+                    verdict_pb2.DECISION_SOURCE_POLICY,
+                    BYPASS_REASONS[category],
+                ),
+            )
+        except Exception:
+            logger.exception("바이패스 이벤트 보고 준비 실패: %s", flow.request.pretty_url)
+
     def responseheaders(self, flow: http.HTTPFlow) -> None:
+        try:
+            category = self._bypass_category(flow)
+        except Exception:
+            logger.exception("바이패스 판단 실패 — 바이패스하지 않는다: %s", flow.request.pretty_url)
+            category = None
+        if category is not None:
+            self._bypass(flow, category)
+            return
         # 헤더가 나간 뒤에는 차단할 수 없으므로, 판별이 실패하면 다운로드로 간주해 붙잡는다.
         try:
             if not is_download(flow.request.headers, flow.response.headers).is_download:
