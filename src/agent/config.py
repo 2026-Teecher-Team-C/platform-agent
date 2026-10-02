@@ -43,16 +43,33 @@ def _validate_body_size_limit(raw: str, var_name: str) -> str:
     return raw
 
 
+_CREDENTIAL_STORES = {"keyring", "memory"}
+
+
+def _parse_credential_store(raw: str, var_name: str) -> str:
+    value = raw.strip().lower()
+    if value not in _CREDENTIAL_STORES:
+        raise ValueError(f"{var_name}는 keyring 또는 memory여야 한다: {raw!r}")
+    return value
+
+
 @dataclass(frozen=True)
 class Config:
     verdict_server_address: str = "localhost:9090"
     verdict_server_tls: bool = False
-    # S2에서 에이전트 등록 흐름이 이 수동 주입을 대체한다.
+    # 개발용 수동 주입. 비어 있지 않으면 등록·토큰 갱신을 건너뛰고 이 값을 쓴다.
     agent_token: str = ""
     hold_timeout_seconds: float = 120
     rpc_timeout_seconds: float = 10
     # mitmproxy human.parse_size가 읽는 크기 문자열 (예: "500m"). 검사 대상 본문 상한.
     body_size_limit: str = "500m"
+    # 1회용 등록 토큰. 키체인에 자격 증명이 없을 때만 쓴다.
+    enrollment_token: str = ""
+    # 콘솔 PC 현황은 3분 안의 하트비트로 판단한다.
+    heartbeat_interval_seconds: float = 60
+    policy_refresh_seconds: float = 300
+    # keyring(운영) 또는 memory(테스트·키체인 없는 개발 환경)
+    credential_store: str = "keyring"
 
     @staticmethod
     def from_env() -> "Config":
@@ -67,4 +84,12 @@ class Config:
                 os.environ.get("RPC_TIMEOUT_SECONDS", "10"), "RPC_TIMEOUT_SECONDS"
             ),
             body_size_limit=_validate_body_size_limit(os.environ.get("BODY_SIZE_LIMIT", "500m"), "BODY_SIZE_LIMIT"),
+            enrollment_token=os.environ.get("ENROLLMENT_TOKEN", ""),
+            heartbeat_interval_seconds=_parse_positive_seconds(
+                os.environ.get("HEARTBEAT_INTERVAL_SECONDS", "60"), "HEARTBEAT_INTERVAL_SECONDS"
+            ),
+            policy_refresh_seconds=_parse_positive_seconds(
+                os.environ.get("POLICY_REFRESH_SECONDS", "300"), "POLICY_REFRESH_SECONDS"
+            ),
+            credential_store=_parse_credential_store(os.environ.get("CREDENTIAL_STORE", "keyring"), "CREDENTIAL_STORE"),
         )

@@ -17,7 +17,10 @@ import asyncio
 import grpc
 from grpc import aio as grpc_aio
 
+from teecher.agent.v1 import agent_pb2_grpc
 from teecher.verdict.v1 import verdict_pb2, verdict_pb2_grpc
+
+from .agent_server import FakeAgentServicer
 
 EICAR_BODY = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 EICAR_SHA256 = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
@@ -103,10 +106,15 @@ class FakeVerdictServicer(verdict_pb2_grpc.VerdictServiceServicer):
 
 
 async def create_server(host: str = "127.0.0.1", port: int = 0) -> tuple[grpc_aio.Server, int, FakeVerdictServicer]:
-    """port=0이면 빈 포트를 골라 바인딩한다. (server, bound_port, servicer)를 돌려준다."""
+    """port=0이면 빈 포트를 골라 바인딩한다. (server, bound_port, servicer)를 돌려준다.
+
+    가짜 AgentService도 같은 서버에 붙는다 — servicer.agent로 접근한다.
+    """
     servicer = FakeVerdictServicer()
+    servicer.agent = FakeAgentServicer()
     server = grpc_aio.server()
     verdict_pb2_grpc.add_VerdictServiceServicer_to_server(servicer, server)
+    agent_pb2_grpc.add_AgentServiceServicer_to_server(servicer.agent, server)
     bound_port = server.add_insecure_port(f"{host}:{port}")
     await server.start()
     return server, bound_port, servicer
