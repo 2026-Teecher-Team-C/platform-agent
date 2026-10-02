@@ -8,7 +8,7 @@ from grpc import aio as grpc_aio
 
 from agent.config import Config
 from agent.held_body import MemoryBody
-from agent.verdict_client import CHUNK_SIZE, ReportFailed, VerdictClient, VerdictUnavailable
+from agent.verdict_client import CHUNK_SIZE, ReportFailed, VerdictClient, VerdictUnavailable, open_channel
 from teecher.verdict.v1 import verdict_pb2, verdict_pb2_grpc
 
 
@@ -326,3 +326,29 @@ def test_BODY_SIZE_LIMIT이_잘못되면_ValueError(monkeypatch, raw):
 
     with pytest.raises(ValueError):
         Config.from_env()
+
+
+async def test_토큰_콜러블은_호출할_때마다_다시_읽는다(fake_server):
+    port, servicer = fake_server
+    current = ["tok-a"]
+    client = VerdictClient(Config(verdict_server_address=f"127.0.0.1:{port}"), token=lambda: current[0])
+
+    await client.check_hash("0" * 64, 10)
+    assert servicer.last_metadata.get("authorization") == "Bearer tok-a"
+    current[0] = "tok-b"
+    await client.check_hash("0" * 64, 10)
+
+    assert servicer.last_metadata.get("authorization") == "Bearer tok-b"
+    await client.close()
+
+
+async def test_주입된_채널은_close가_닫지_않는다(fake_server):
+    port, _ = fake_server
+    config = Config(verdict_server_address=f"127.0.0.1:{port}")
+    channel = open_channel(config)
+    client = VerdictClient(config, channel)
+
+    await client.close()
+    await VerdictClient(config, channel).check_hash("0" * 64, 10)  # 아직 쓸 수 있다
+
+    await channel.close()

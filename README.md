@@ -37,6 +37,21 @@ uv run --group dev pytest
 
 OS에 의존하는 코드는 `src/agent/platform/`(linux / macos / windows)에만 둔다. CI는 세 OS에서 모두 테스트한다.
 
+## 환경변수
+
+| 환경변수 | 기본값 | 설명 |
+|---|---|---|
+| `VERDICT_SERVER_ADDRESS` | `localhost:9090` | 검사 서버 gRPC 주소 (VerdictService·AgentService 공용) |
+| `VERDICT_SERVER_TLS` | `false` | gRPC TLS |
+| `ENROLLMENT_TOKEN` | (없음) | 1회용 등록 토큰. 키체인에 자격 증명이 없거나, 저장된 토큰이 거부·만료됐을 때 쓴다 |
+| `AGENT_TOKEN` | (없음) | 개발용 수동 주입. 있으면 등록·토큰 갱신을 건너뛴다 |
+| `CREDENTIAL_STORE` | `keyring` | `keyring`(OS 키체인) 또는 `memory`(키체인 없는 개발 환경) |
+| `HEARTBEAT_INTERVAL_SECONDS` | `60` | 하트비트·토큰 갱신 확인 주기 |
+| `POLICY_REFRESH_SECONDS` | `300` | 정책 재수신 주기 |
+| `HOLD_TIMEOUT_SECONDS` | `120` | 보류 최대 시간 |
+| `RPC_TIMEOUT_SECONDS` | `10` | 단건 RPC 타임아웃 |
+| `BODY_SIZE_LIMIT` | `500m` | 검사 대상 본문 상한 (초과는 차단) |
+
 ## 배포
 
 최종 배포는 설치 파일(PyInstaller → `.pkg` / `.msi`)이다. 설치 시 CA 등록, 시스템 프록시 설정, 서비스 등록을

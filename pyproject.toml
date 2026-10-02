@@ -7,6 +7,7 @@ dependencies = [
     "mitmproxy>=12",
     "grpcio>=1.75",
     "protobuf>=6.32",
+    "keyring>=25",
 ]
 
 [dependency-groups]
