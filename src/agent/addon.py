@@ -7,7 +7,6 @@ mitmproxy는 훅에서 새는 예외를 로그만 남기고 원래 응답을 통
 """
 
 import asyncio
-import hashlib
 import logging
 import time
 import uuid
@@ -18,6 +17,7 @@ from mitmproxy import ctx, exceptions, http
 
 from agent.config import Config
 from agent.detection import filename_of, is_download
+from agent.held_body import HeldBody, held_body_of
 from agent.verdict_client import VerdictClient
 from teecher.verdict.v1 import verdict_pb2
 
@@ -177,7 +177,8 @@ class HoldPipeline:
             except Exception:
                 logger.exception("flow kill 실패: %s", flow.request.pretty_url)
             return
-        if flow.request.method == "HEAD" or not flow.response.raw_content:
+        body = held_body_of(flow)
+        if flow.request.method == "HEAD" or body is None:
             # 저장될 본문이 없다(HEAD/204/304 등) — 검사·보고하지 않는다.
             return
 
@@ -186,7 +187,7 @@ class HoldPipeline:
             hold = flow.metadata.get(HOLD_KEY) or _snapshot(flow)
             if self.client is None or self.config is None:
                 raise RuntimeError("보류 파이프라인이 시작되지 않았다 (running() 실패?)")
-            outcome = await asyncio.wait_for(self._decide(flow, hold), self.config.hold_timeout_seconds)
+            outcome = await asyncio.wait_for(self._decide(body, hold), self.config.hold_timeout_seconds)
         except asyncio.CancelledError:
             # 외부 취소(종료 등)는 삼키지 않고 다시 던진다. 다만 호출자가 취소를 삼키고 응답을 내보내더라도
             # 원본이 나가지 않도록 먼저 403으로 바꿔 둔다.
@@ -219,7 +220,7 @@ class HoldPipeline:
         except Exception:
             logger.exception("오류 flow 보고 실패: %s", flow.request.pretty_url)
 
-    async def _decide(self, flow: http.HTTPFlow, hold: Hold) -> Outcome:
+    async def _decide(self, body: HeldBody, hold: Hold) -> Outcome:
         assert self.client is not None and self.config is not None  # response()에서 확인했다
         deadline = time.monotonic() + self.config.hold_timeout_seconds
 
@@ -230,12 +231,8 @@ class HoldPipeline:
                 verdict_pb2.FINAL_DECISION_BLOCKED, verdict_pb2.DECISION_SOURCE_POLICY, ENCODED_DOWNLOAD_REASON
             )
 
-        # S1은 본문이 메모리에 있다(버퍼링). S2의 스트리밍 스풀은 mitmproxy 실측상 헤더를 붙잡은 채로는
-        # 불가능하다 — 설계 레포 docs/superpowers/specs/2026-09-26-header-timing.md 참고.
-        # `.content`는 Content-Encoding을 풀므로 쓰지 않는다.
-        body = flow.response.raw_content or b""
-        hold.file_size = len(body)
-        hold.sha256 = (await asyncio.to_thread(hashlib.sha256, body)).hexdigest()
+        hold.file_size = body.size
+        hold.sha256 = await body.sha256()
 
         check = await self.client.check_hash(hold.sha256, hold.file_size)
         if check.decision == verdict_pb2.DECISION_ALLOW:
@@ -257,8 +254,8 @@ class HoldPipeline:
         )
         reason = submit.reason or ", ".join(submit.matched_rules)
         if submit.decision == verdict_pb2.DECISION_ALLOW:
-            return Outcome(verdict_pb2.FINAL_DECISION_RELEASED, submit.source, reason, bytes_uploaded=len(body))
-        return Outcome(verdict_pb2.FINAL_DECISION_BLOCKED, submit.source, reason, bytes_uploaded=len(body))
+            return Outcome(verdict_pb2.FINAL_DECISION_RELEASED, submit.source, reason, bytes_uploaded=body.size)
+        return Outcome(verdict_pb2.FINAL_DECISION_BLOCKED, submit.source, reason, bytes_uploaded=body.size)
 
     def _schedule_report(self, hold: Hold, outcome: Outcome) -> None:
         # 판정 뒤의 일이라 보류 시간에 넣지 않는다. 실패해도 판정은 바뀌지 않는다.

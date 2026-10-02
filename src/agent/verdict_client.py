@@ -10,6 +10,7 @@ import grpc
 from grpc import aio as grpc_aio
 
 from agent.config import Config
+from agent.held_body import HeldBody
 from teecher.verdict.v1 import verdict_pb2, verdict_pb2_grpc
 
 CHUNK_SIZE = 64 * 1024
@@ -76,7 +77,7 @@ class VerdictClient:
         filename: str,
         mime_type: str,
         event_id: str,
-        body: bytes,
+        body: HeldBody,
         timeout: float,
     ) -> verdict_pb2.SubmitFileResponse:
         try:
@@ -88,7 +89,7 @@ class VerdictClient:
         except Exception as exc:
             raise VerdictUnavailable(f"SubmitFile 실패: {exc}") from exc
 
-        # 청크를 만드는 도중 예외(예: body가 bytes가 아님, S2의 스풀 I/O 오류)가 나면
+        # 청크를 만드는 도중 예외(예: 본문 읽기 실패, 스풀 I/O 오류)가 나면
         # grpc.aio는 이 스트림을 읽는 내부 태스크를 실패시키고, 우리 쪽 await에는
         # asyncio.CancelledError로 전달한다. 원래 예외를 저장해뒀다가 CancelledError를
         # 받으면 다시 꺼내 fail-close로 바꾼다. 진짜 외부 취소(cancelling() > 0)는 그대로 통과시킨다.
@@ -98,9 +99,8 @@ class VerdictClient:
             nonlocal iterator_error
             try:
                 yield metadata_message
-                # S1은 본문을 메모리에 담아 보낸다. S2에서 스풀 파일 스트리밍으로 바꾼다.
-                for offset in range(0, len(body), CHUNK_SIZE):
-                    yield verdict_pb2.SubmitFileRequest(chunk=body[offset : offset + CHUNK_SIZE])
+                async for chunk in body.chunks(CHUNK_SIZE):
+                    yield verdict_pb2.SubmitFileRequest(chunk=chunk)
             except Exception as exc:
                 iterator_error = exc
                 raise
