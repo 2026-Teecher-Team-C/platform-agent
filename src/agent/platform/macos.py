@@ -2,9 +2,9 @@ import re
 import subprocess
 from pathlib import Path
 
-from agent.platform.base import create_spool_dir, create_spool_file
+from agent.platform.base import AppDirs, create_spool_dir, create_spool_file
 
-__all__ = ["create_spool_file", "hardware_uuid", "prepare_spool_dir"]
+__all__ = ["app_dirs", "create_spool_file", "hardware_uuid", "prepare_spool_dir"]
 
 _IOREG_UUID = re.compile(r'"IOPlatformUUID"\s*=\s*"([^"]+)"')
 
@@ -37,3 +37,10 @@ def prepare_spool_dir(path: Path) -> Path:
     create_spool_dir(path)
     (path / SPOTLIGHT_EXCLUSION_MARKER).touch(mode=0o600, exist_ok=True)
     return path
+
+
+def app_dirs(home: Path) -> AppDirs:
+    return AppDirs(
+        data=home / "Library" / "Application Support" / "Teecher",
+        logs=home / "Library" / "Logs" / "Teecher",
+    )

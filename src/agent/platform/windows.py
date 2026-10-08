@@ -1,11 +1,12 @@
 import ctypes
+import os
 import subprocess
 from pathlib import Path
 
 from agent.platform import base
-from agent.platform.base import SpoolFile, create_spool_dir
+from agent.platform.base import AppDirs, SpoolFile, create_spool_dir
 
-__all__ = ["create_spool_file", "hardware_uuid", "prepare_spool_dir"]
+__all__ = ["app_dirs", "create_spool_file", "hardware_uuid", "prepare_spool_dir"]
 
 
 def hardware_uuid() -> str:
@@ -52,3 +53,13 @@ def create_spool_file(spool_dir: Path) -> SpoolFile:
     # 상속에 기대지 않고 파일에도 직접 건다.
     _add_attribute(spool_file.path, FILE_ATTRIBUTE_NOT_CONTENT_INDEXED)
     return spool_file
+
+
+def app_dirs(home: Path) -> AppDirs:
+    # 기본 홈이면 폴더 리디렉션을 따라 LOCALAPPDATA를 쓴다. 다른 홈을 주면 그 아래 표준 위치다
+    if home == Path.home() and os.environ.get("LOCALAPPDATA"):
+        local = Path(os.environ["LOCALAPPDATA"])
+    else:
+        local = home / "AppData" / "Local"
+    data = local / "Teecher"
+    return AppDirs(data=data, logs=data / "logs")
