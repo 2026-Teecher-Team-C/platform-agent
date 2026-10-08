@@ -35,32 +35,11 @@ def test_MemoryStore는_저장한_것을_돌려준다():
     assert store.load() == creds()
 
 
-def fake_backend(qualified_name: str, chained: list | None = None):
-    """keyring.get_keyring()이 돌려줄 백엔드 흉내. 이 OS에 없는 백엔드 모듈을 import하지 않으려고 이름만 맞춘다."""
-    module, _, name = qualified_name.rpartition(".")
-    cls = type(name, (), {"__module__": module, "__qualname__": name})
-    backend = cls()
-    if chained is not None:
-        backend.backends = chained
-    return backend
-
-
-MACOS = "keyring.backends.macOS.Keyring"
-WINDOWS = "keyring.backends.Windows.WinVaultKeyring"
-SECRET_SERVICE = "keyring.backends.SecretService.Keyring"
-PLAINTEXT = "keyrings.alt.file.PlaintextKeyring"
-CHAINER = "keyring.backends.chainer.ChainerBackend"
-
-
-class FakeKeyring:
+class FakeBackend:
     def __init__(self) -> None:
         self.data: dict[tuple[str, str], str] = {}
         self.fail = False
-        self.backend = fake_backend(MACOS)
         self.calls: list[str] = []
-
-    def get_keyring(self):
-        return self.backend
 
     def get_password(self, service: str, username: str) -> str | None:
         self.calls.append("get_password")
@@ -73,6 +52,46 @@ class FakeKeyring:
         if self.fail:
             raise RuntimeError("keychain locked")
         self.data[(service, username)] = value
+
+
+def fake_backend(qualified_name: str, chained: list | None = None) -> FakeBackend:
+    """keyring.get_keyring()이 돌려줄 백엔드 흉내. 클래스 이름(모듈.이름)만 실제 백엔드와 맞춘다."""
+    module, _, name = qualified_name.rpartition(".")
+    cls = type(name, (FakeBackend,), {"__module__": module, "__qualname__": name})
+    backend = cls()
+    if chained is not None:
+        backend.backends = chained
+    return backend
+
+
+MACOS = "keyring.backends.macOS.Keyring"
+WINDOWS = "keyring.backends.Windows.WinVaultKeyring"
+SECRET_SERVICE = "keyring.backends.SecretService.Keyring"
+PLAINTEXT = "keyrings.alt.file.PlaintextKeyring"
+NULL = "keyring.backends.null.Keyring"
+CHAINER = "keyring.backends.chainer.ChainerBackend"
+
+
+class FakeKeyring:
+    """keyring 모듈 대역. get_keyring()만 둔다 — 저장소는 고른 백엔드 인스턴스로만 읽고 쓴다."""
+
+    def __init__(self) -> None:
+        self.backend: FakeBackend = fake_backend(MACOS)
+
+    def get_keyring(self) -> FakeBackend:
+        return self.backend
+
+    @property
+    def data(self) -> dict[tuple[str, str], str]:
+        return self.backend.data
+
+    @property
+    def fail(self) -> bool:
+        return self.backend.fail
+
+    @fail.setter
+    def fail(self, value: bool) -> None:
+        self.backend.fail = value
 
 
 @pytest.fixture
@@ -143,33 +162,48 @@ def test_KeyringStore는_OS_보안_저장소_백엔드에는_저장하고_읽는
 
 
 @pytest.mark.parametrize(
-    "backend",
-    [
-        fake_backend(PLAINTEXT),
-        fake_backend("keyring.backends.null.Keyring"),
-        fake_backend(CHAINER, chained=[fake_backend(MACOS), fake_backend(PLAINTEXT)]),
-        fake_backend(CHAINER, chained=[]),
-    ],
-    ids=["plaintext", "null", "chainer-with-plaintext", "chainer-empty"],
+    "chained",
+    [[NULL, PLAINTEXT], []],
+    ids=["chainer-without-secure", "chainer-empty"],
 )
-def test_KeyringStore는_허용하지_않은_백엔드에_쓰지도_읽지도_않는다(fake_keyring, backend, caplog):
-    fake_keyring.backend = backend
+def test_KeyringStore는_허용된_백엔드가_없는_체이너에_쓰지도_읽지도_않는다(fake_keyring, chained, caplog):
+    members = [fake_backend(name) for name in chained]
+    fake_keyring.backend = fake_backend(CHAINER, chained=members)
+
+    with pytest.raises(CredentialStoreError):
+        KeyringStore().save(creds())
+    assert KeyringStore().load() is None
+
+    assert fake_keyring.backend.calls == []
+    assert all(member.calls == [] for member in members)
+    assert "tok-1" not in caplog.text
+
+
+@pytest.mark.parametrize("name", [PLAINTEXT, NULL])
+def test_KeyringStore는_허용하지_않은_백엔드에_쓰지도_읽지도_않는다(fake_keyring, name, caplog):
+    fake_keyring.backend = fake_backend(name)
     fake_keyring.data[("teecher-agent", "credentials")] = creds().to_json()
 
     with pytest.raises(CredentialStoreError):
         KeyringStore().save(creds())
     assert KeyringStore().load() is None
 
-    assert fake_keyring.calls == []
+    assert fake_keyring.backend.calls == []
     assert "tok-1" not in caplog.text
 
 
-def test_KeyringStore는_모든_체인_백엔드가_허용되면_체이너를_쓴다(fake_keyring):
-    fake_keyring.backend = fake_backend(CHAINER, chained=[fake_backend(SECRET_SERVICE)])
+@pytest.mark.parametrize("plaintext_first", [True, False], ids=["plaintext-first", "secure-first"])
+def test_KeyringStore는_체이너에서_허용된_백엔드에만_쓰고_읽는다(fake_keyring, plaintext_first):
+    secure, plaintext = fake_backend(SECRET_SERVICE), fake_backend(PLAINTEXT)
+    members = [plaintext, secure] if plaintext_first else [secure, plaintext]
+    fake_keyring.backend = fake_backend(CHAINER, chained=members)
 
     KeyringStore().save(creds())
 
     assert KeyringStore().load() == creds()
+    assert ("teecher-agent", "credentials") in secure.data
+    assert plaintext.calls == []
+    assert fake_keyring.backend.calls == []  # 체이너 자체로는 쓰지 않는다
 
 
 @pytest.mark.parametrize("name", sorted(credentials.SECURE_BACKENDS))

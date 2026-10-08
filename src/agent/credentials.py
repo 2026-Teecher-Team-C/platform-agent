@@ -10,7 +10,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 import keyring
 
@@ -20,7 +20,8 @@ SERVICE = "teecher-agent"
 USERNAME = "credentials"
 
 # OS 보안 저장소 백엔드만 쓴다. keyrings.alt 같은 평문 파일 백엔드가 골라져도 토큰을 쓰지 않는다(CWE-312).
-# 다른 OS의 백엔드 모듈을 import하지 않도록 클래스 이름으로 비교한다
+# 클래스의 정확한 이름(모듈.이름)으로 비교한다 — 하위 클래스나 설정으로 바꿔 끼운 백엔드에 속지 않고,
+# 백엔드 모듈을 import할 때의 부수 효과에 기대지 않는다
 SECURE_BACKENDS = frozenset(
     {
         "keyring.backends.macOS.Keyring",
@@ -93,22 +94,26 @@ def _backend_name(backend: object) -> str:
     return f"{type(backend).__module__}.{type(backend).__qualname__}"
 
 
-def _is_secure(backend: object) -> bool:
-    # 체이너는 묶인 백엔드 중 처음 성공하는 곳에 쓰고 읽으므로, 묶인 백엔드가 전부 허용될 때만 쓴다
+def _secure_backend(backend: Any) -> Any | None:
+    """읽고 쓸 OS 보안 저장소 백엔드. 없으면 None.
+
+    체이너는 그 자체로 쓰지 않는다 — 묶인 백엔드 중 처음 성공하는 곳(평문 파일일 수 있다)에 쓰기 때문이다.
+    keyrings.alt처럼 백엔드가 둘 이상이면 keyring은 체이너를 고르므로, 묶인 것 중 허용된 첫 백엔드를 직접 쓴다.
+    """
     if _backend_name(backend) == _CHAINER:
-        chained = list(getattr(backend, "backends", ()))
-        return bool(chained) and all(_backend_name(b) in SECURE_BACKENDS for b in chained)
-    return _backend_name(backend) in SECURE_BACKENDS
+        return next((b for b in getattr(backend, "backends", ()) if _backend_name(b) in SECURE_BACKENDS), None)
+    return backend if _backend_name(backend) in SECURE_BACKENDS else None
 
 
 class KeyringStore:
     def load(self) -> Credentials | None:
         try:
-            backend = keyring.get_keyring()
-            if not _is_secure(backend):
-                logger.error("OS 보안 저장소가 아닌 keyring 백엔드(%s) — 읽지 않는다", _backend_name(backend))
+            active = keyring.get_keyring()
+            backend = _secure_backend(active)
+            if backend is None:
+                logger.error("OS 보안 저장소가 아닌 keyring 백엔드(%s) — 읽지 않는다", _backend_name(active))
                 return None
-            raw = keyring.get_password(SERVICE, USERNAME)
+            raw = backend.get_password(SERVICE, USERNAME)
         except Exception:
             logger.exception("키체인에서 자격 증명을 읽지 못했다 — 없는 것으로 본다")
             return None
@@ -122,13 +127,14 @@ class KeyringStore:
 
     def save(self, creds: Credentials) -> None:
         try:
-            backend = keyring.get_keyring()
+            active = keyring.get_keyring()
         except Exception as exc:
             raise CredentialStoreError(f"키체인 백엔드 확인 실패: {type(exc).__name__}") from exc
-        if not _is_secure(backend):
-            raise CredentialStoreError(f"OS 보안 저장소가 아닌 keyring 백엔드: {_backend_name(backend)}")
+        backend = _secure_backend(active)
+        if backend is None:
+            raise CredentialStoreError(f"OS 보안 저장소가 아닌 keyring 백엔드: {_backend_name(active)}")
         try:
-            keyring.set_password(SERVICE, USERNAME, creds.to_json())
+            backend.set_password(SERVICE, USERNAME, creds.to_json())
         except Exception as exc:
             raise CredentialStoreError(f"키체인 저장 실패: {type(exc).__name__}") from exc
 
