@@ -2,9 +2,9 @@ import re
 import subprocess
 from pathlib import Path
 
-from agent.platform.base import AppDirs, create_spool_dir, create_spool_file
+from agent.platform.base import AppDirs, create_spool_dir, create_spool_file, install_shutdown_handler
 
-__all__ = ["app_dirs", "create_spool_file", "hardware_uuid", "prepare_spool_dir"]
+__all__ = ["app_dirs", "create_spool_file", "hardware_uuid", "install_shutdown_handler", "prepare_spool_dir"]
 
 _IOREG_UUID = re.compile(r'"IOPlatformUUID"\s*=\s*"([^"]+)"')
 

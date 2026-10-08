@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from agent.platform.base import AppDirs, create_spool_dir, create_spool_file
+from agent.platform.base import AppDirs, create_spool_dir, create_spool_file, install_shutdown_handler
 
-__all__ = ["app_dirs", "create_spool_file", "hardware_uuid", "prepare_spool_dir"]
+__all__ = ["app_dirs", "create_spool_file", "hardware_uuid", "install_shutdown_handler", "prepare_spool_dir"]
 
 
 def hardware_uuid() -> str:

@@ -1,5 +1,8 @@
+import asyncio
 import os
+import signal
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,3 +51,8 @@ class AppDirs:
     def ca(self) -> Path:
         # mitmproxy confdir. 개발용 ~/.mitmproxy와 섞이지 않게 따로 둔다
         return self.data / "mitmproxy"
+
+
+def install_shutdown_handler(loop: asyncio.AbstractEventLoop, callback: Callable[[], None]) -> None:
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, callback)

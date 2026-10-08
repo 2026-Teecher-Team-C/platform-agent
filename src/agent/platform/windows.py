@@ -1,12 +1,14 @@
+import asyncio
 import ctypes
 import os
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from agent.platform import base
 from agent.platform.base import AppDirs, SpoolFile, create_spool_dir
 
-__all__ = ["app_dirs", "create_spool_file", "hardware_uuid", "prepare_spool_dir"]
+__all__ = ["app_dirs", "create_spool_file", "hardware_uuid", "install_shutdown_handler", "prepare_spool_dir"]
 
 
 def hardware_uuid() -> str:
@@ -63,3 +65,8 @@ def app_dirs(home: Path) -> AppDirs:
         local = home / "AppData" / "Local"
     data = local / "Teecher"
     return AppDirs(data=data, logs=data / "logs")
+
+
+def install_shutdown_handler(loop: asyncio.AbstractEventLoop, callback: Callable[[], None]) -> None:
+    # Windows 이벤트 루프는 add_signal_handler가 없다. 작업 스케줄러의 /End는 프로세스를 바로 끝낸다
+    return None
