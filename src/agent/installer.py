@@ -6,7 +6,8 @@ OS 설치 파일이 권한에 맞게 단계(phase)를 하나씩 부른다(설계
   activate (macOS 관리자, Windows 사용자)  시스템 프록시 켜기
 프록시는 맨 마지막이다. 먼저 켜면 에이전트가 뜨기 전까지 모든 웹이 끊긴다.
 
-한 단계 안에서 실패하면 그 단계에서 한 일을 역순으로 되돌리고 InstallError를 낸다. 앞 단계까지
+한 단계 안에서 실패하면 실패한 단계 자신(일부만 됐을 수 있다)과 앞서 끝낸 단계를 역순으로 되돌리고
+InstallError를 낸다. 포트 충돌(PortBusyError)은 아무것도 바꾸기 전에 나므로 실패한 단계는 되돌리지 않는다. 앞 단계까지
 되돌리는 일은 OS 설치 파일이 uninstall을 불러서 한다. 제거는 activate → trust → prepare 순서이고,
 하나가 실패해도 멈추지 않고 남은 항목을 모은다. CA 파일은 신뢰를 푼 다음(prepare 되돌리기)에 지운다 —
 신뢰 해제에 쓰는 핑거프린트를 그 파일에서 계산하기 때문이다.
@@ -186,7 +187,10 @@ def install_phase(steps: list[Step], phase: Phase) -> list[str]:
             step.do()
         except Exception as exc:
             logger.error("설치 실패: %s: %s", step.name, exc)
-            raise InstallError(step.name, exc, _undo(reversed(performed))) from exc
+            to_undo = list(reversed(performed))
+            if not isinstance(exc, PortBusyError):
+                to_undo.insert(0, step)  # 일부만 적용됐을 수 있다 — undo는 멱등이다
+            raise InstallError(step.name, exc, _undo(to_undo)) from exc
         performed.append(step)
     return [step.name for step in performed]
 

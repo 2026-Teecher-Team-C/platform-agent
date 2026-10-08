@@ -33,10 +33,11 @@ class FakeIntegration:
         self.proxy = False
         self.autostart = False
         self.fail_on: str | None = None
+        self.fail_also: set[str] = set()
 
     def _call(self, name: str) -> None:
         self.calls.append(name)
-        if self.fail_on == name:
+        if self.fail_on == name or name in self.fail_also:
             raise RuntimeError(f"{name} 실패")
 
     def ca_trusted(self, ca) -> bool:
@@ -214,6 +215,44 @@ def test_등록_실패_메시지에_단계_이름이_들어간다(ctx):
     context.enroll = bad
     with pytest.raises(InstallError, match=STEP_ENROLL):
         install_phase(build_steps(context), Phase.PREPARE)
+
+
+def test_포트가_안_열리면_등록한_자동_실행도_되돌린다(ctx):
+    context, integration, store, _ = ctx
+    context.wait_port = lambda: False
+
+    with pytest.raises(InstallError) as info:
+        install_phase(build_steps(context), Phase.PREPARE)
+
+    assert info.value.step == STEP_AUTOSTART
+    assert "remove_autostart" in integration.calls
+    assert integration.autostart is False
+    assert store.load() is None
+    assert not context.dirs.data.exists()
+
+
+def test_설치_실패의_되돌리기도_실패하면_남은_항목으로_알린다(ctx):
+    context, integration, _, _ = ctx
+    context.wait_port = lambda: False
+    integration.fail_also = {"remove_autostart"}
+
+    with pytest.raises(InstallError, match="되돌리지 못한 항목") as info:
+        install_phase(build_steps(context), Phase.PREPARE)
+
+    assert info.value.leftovers == [STEP_AUTOSTART]
+
+
+def test_등록이_실패하면_앞서_만든_CA를_지운다(ctx):
+    context, _, _, _ = ctx
+
+    def bad() -> None:
+        raise RuntimeError("UNAUTHENTICATED")
+
+    context.enroll = bad
+    with pytest.raises(InstallError):
+        install_phase(build_steps(context), Phase.PREPARE)
+
+    assert not context.dirs.data.exists()
 
 
 def test_프록시_단계_이름(ctx):
