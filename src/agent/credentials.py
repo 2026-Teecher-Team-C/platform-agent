@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Protocol
 
 import keyring
+from keyring.errors import PasswordDeleteError
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,8 @@ class CredentialStore(Protocol):
 
     def save(self, creds: Credentials) -> None: ...
 
+    def clear(self) -> None: ...
+
 
 class MemoryStore:
     """테스트·개발(Docker처럼 키체인이 없는 환경)용. 재시작하면 사라진다."""
@@ -88,6 +91,9 @@ class MemoryStore:
 
     def save(self, creds: Credentials) -> None:
         self._creds = creds
+
+    def clear(self) -> None:
+        self._creds = None
 
 
 def _backend_name(backend: object) -> str:
@@ -125,7 +131,7 @@ class KeyringStore:
             logger.error("키체인의 자격 증명 항목이 깨졌다 — 없는 것으로 본다")
             return None
 
-    def save(self, creds: Credentials) -> None:
+    def _backend_for_write(self) -> Any:
         try:
             active = keyring.get_keyring()
         except Exception as exc:
@@ -133,10 +139,31 @@ class KeyringStore:
         backend = _secure_backend(active)
         if backend is None:
             raise CredentialStoreError(f"OS 보안 저장소가 아닌 keyring 백엔드: {_backend_name(active)}")
+        return backend
+
+    def save(self, creds: Credentials) -> None:
+        backend = self._backend_for_write()
         try:
             backend.set_password(SERVICE, USERNAME, creds.to_json())
         except Exception as exc:
             raise CredentialStoreError(f"키체인 저장 실패: {type(exc).__name__}") from exc
+
+    def clear(self) -> None:
+        backend = self._backend_for_write()
+        try:
+            backend.delete_password(SERVICE, USERNAME)
+        except PasswordDeleteError:
+            return  # 이미 없다
+        except Exception as exc:
+            raise CredentialStoreError(f"키체인 삭제 실패: {type(exc).__name__}") from exc
+
+
+def secure_backend_available() -> bool:
+    """설치본 자체 점검용. PyInstaller가 keyring 백엔드 메타데이터를 빠뜨리면 False가 된다."""
+    try:
+        return _secure_backend(keyring.get_keyring()) is not None
+    except Exception:
+        return False
 
 
 def make_store(kind: str) -> CredentialStore:
