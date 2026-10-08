@@ -10,26 +10,32 @@ from agent.platform.base import PROXY_HOST, PROXY_PORT, AppDirs, SpoolFile, Unsu
 
 if sys.platform == "darwin":
     from agent.platform.macos import (
+        agent_run_command,
         app_dirs,
         create_spool_file,
         hardware_uuid,
         install_shutdown_handler,
+        os_integration,
         prepare_spool_dir,
     )
 elif sys.platform == "win32":
     from agent.platform.windows import (
+        agent_run_command,
         app_dirs,
         create_spool_file,
         hardware_uuid,
         install_shutdown_handler,
+        os_integration,
         prepare_spool_dir,
     )
 else:
     from agent.platform.linux import (
+        agent_run_command,
         app_dirs,
         create_spool_file,
         hardware_uuid,
         install_shutdown_handler,
+        os_integration,
         prepare_spool_dir,
     )
 
@@ -39,9 +45,11 @@ __all__ = [
     "AppDirs",
     "SpoolFile",
     "UnsupportedPlatformError",
+    "agent_run_command",
     "app_dirs",
     "create_spool_file",
     "hardware_uuid",
     "install_shutdown_handler",
+    "os_integration",
     "prepare_spool_dir",
 ]

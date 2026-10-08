@@ -1,8 +1,23 @@
+import sys
 from pathlib import Path
 
-from agent.platform.base import AppDirs, create_spool_dir, create_spool_file, install_shutdown_handler
+from agent.platform.base import (
+    AppDirs,
+    UnsupportedPlatformError,
+    create_spool_dir,
+    create_spool_file,
+    install_shutdown_handler,
+)
 
-__all__ = ["app_dirs", "create_spool_file", "hardware_uuid", "install_shutdown_handler", "prepare_spool_dir"]
+__all__ = [
+    "agent_run_command",
+    "app_dirs",
+    "create_spool_file",
+    "hardware_uuid",
+    "install_shutdown_handler",
+    "os_integration",
+    "prepare_spool_dir",
+]
 
 
 def hardware_uuid() -> str:
@@ -21,3 +36,11 @@ def prepare_spool_dir(path: Path) -> Path:
 def app_dirs(home: Path) -> AppDirs:
     data = home / ".local" / "share" / "teecher"
     return AppDirs(data=data, logs=data / "logs")
+
+
+def os_integration(dirs: AppDirs, home: Path):
+    raise UnsupportedPlatformError("리눅스 설치는 지원하지 않는다 — 개발은 `teecher-agent run` 또는 mitmdump -s로 한다")
+
+
+def agent_run_command() -> list[str]:
+    return [sys.executable, "-m", "agent", "run"]

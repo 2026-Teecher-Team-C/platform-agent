@@ -3,6 +3,7 @@ import ctypes
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -15,7 +16,15 @@ from agent.platform.base import PROXY_HOST, PROXY_PORT, AppDirs, SpoolFile, crea
 if TYPE_CHECKING:
     from agent.ca import CaFiles
 
-__all__ = ["app_dirs", "create_spool_file", "hardware_uuid", "install_shutdown_handler", "prepare_spool_dir"]
+__all__ = [
+    "agent_run_command",
+    "app_dirs",
+    "create_spool_file",
+    "hardware_uuid",
+    "install_shutdown_handler",
+    "os_integration",
+    "prepare_spool_dir",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -242,3 +251,14 @@ class WindowsIntegration:
         except subprocess.CalledProcessError:
             pass  # 실행 중이 아니다
         self._run(["schtasks", "/Delete", "/F", "/TN", self._task])
+
+
+def os_integration(dirs: AppDirs, home: Path) -> WindowsIntegration:
+    return WindowsIntegration()
+
+
+def agent_run_command() -> list[str]:
+    if getattr(sys, "frozen", False):
+        # 작업 스케줄러가 띄우는 쪽은 콘솔 창이 없는 실행 파일이다(스펙 5.2)
+        return [str(Path(sys.executable).with_name("teecher-agentw.exe")), "run"]
+    return [sys.executable, "-m", "agent", "run"]

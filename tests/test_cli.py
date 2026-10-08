@@ -1,0 +1,133 @@
+import pytest
+from test_installer import CREDS, FakeIntegration
+
+from agent import cli
+from agent.credentials import MemoryStore
+
+
+@pytest.fixture
+def env(monkeypatch, tmp_path):
+    integration = FakeIntegration()
+    store = MemoryStore()
+    monkeypatch.setattr(cli, "make_store", lambda kind: store)
+    listening = {"on": False}
+    monkeypatch.setattr(cli, "port_open", lambda host, port, timeout=0.5: listening["on"])
+
+    def fake_wait(host, port, timeout=15.0, interval=0.25):
+        listening["on"] = integration.autostart
+        return listening["on"]
+
+    monkeypatch.setattr(cli, "wait_port", fake_wait)
+    enrolled = []
+
+    async def fake_enroll(config, token, s):
+        if token != "enroll-ok":
+            raise RuntimeError("invalid enrollment token")
+        enrolled.append(token)
+        s.save(CREDS)
+        return CREDS
+
+    monkeypatch.setattr(cli, "enroll", fake_enroll)
+    monkeypatch.delenv("ENROLLMENT_TOKEN", raising=False)
+
+    def run(*argv: str) -> int:
+        return cli.main(["--home", str(tmp_path), *argv], integration_factory=lambda dirs, home: integration)
+
+    return run, integration, store, enrolled
+
+
+def test_세_단계를_설치하고_status가_모두_OK다(env, capsys):
+    run, integration, store, enrolled = env
+
+    assert run("install", "--phase", "prepare", "--enrollment-token", "enroll-ok") == 0
+    assert run("install", "--phase", "trust") == 0
+    assert run("install", "--phase", "activate") == 0
+    assert run("status") == 0
+
+    assert enrolled == ["enroll-ok"]
+    out = capsys.readouterr().out
+    assert "enroll-ok" not in out  # 토큰 값을 출력하지 않는다
+    assert out.count("OK ") >= 5
+
+
+def test_토큰_없이_처음_설치하면_실패하고_되돌린다(env, capsys, tmp_path):
+    run, integration, store, _ = env
+
+    assert run("install", "--phase", "prepare") == 1
+
+    assert "등록" in capsys.readouterr().err
+    assert store.load() is None
+    assert integration.calls == []
+
+
+def test_잘못된_토큰_오류에_토큰_값이_없다(env, capsys):
+    run, _, _, _ = env
+
+    assert run("install", "--phase", "prepare", "--enrollment-token", "wrong-token-123") == 1
+
+    assert "wrong-token-123" not in capsys.readouterr().err
+
+
+def test_제거하고_status는_실패를_알린다(env):
+    run, integration, store, _ = env
+    for phase in ("prepare", "trust", "activate"):
+        run("install", "--phase", phase, "--enrollment-token", "enroll-ok")
+
+    for phase in ("activate", "trust", "prepare"):
+        assert run("uninstall", "--phase", phase) == 0
+
+    assert run("status") == 1
+    assert store.load() is None
+
+
+def test_로그_파일에_단계를_남긴다(env, tmp_path):
+    run, _, _, _ = env
+    log = tmp_path / "install.log"
+
+    run("--log-file", str(log), "install", "--phase", "prepare", "--enrollment-token", "enroll-ok")
+
+    text = log.read_text(encoding="utf-8")
+    assert "설치: 등록" in text
+    assert "enroll-ok" not in text
+
+
+def test_로그_파일_핸들러를_끝나면_떼어낸다(env, tmp_path):
+    import logging
+
+    run, _, _, _ = env
+    before = list(logging.getLogger().handlers)
+
+    run("--log-file", str(tmp_path / "install.log"), "status")
+
+    assert logging.getLogger().handlers == before
+
+
+def test_없는_단계는_인자_오류다(env):
+    run, _, _, _ = env
+
+    with pytest.raises(SystemExit) as info:
+        run("install", "--phase", "everything")
+    assert info.value.code == 2
+
+
+def test_지원하지_않는_OS는_2로_끝난다(monkeypatch, tmp_path, capsys):
+    from agent.platform import UnsupportedPlatformError
+
+    def unsupported(dirs, home):
+        raise UnsupportedPlatformError("리눅스 설치는 지원하지 않는다")
+
+    assert cli.main(["--home", str(tmp_path), "status"], integration_factory=unsupported) == 2
+    assert "리눅스" in capsys.readouterr().err
+
+
+def test_agent_conf를_환경변수보다_낮은_우선순위로_적용한다(monkeypatch, tmp_path):
+    conf = tmp_path / "agent.conf"
+    conf.write_text("VERDICT_SERVER_ADDRESS=from-file:443\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "default_conf_path", lambda: conf)
+    monkeypatch.delenv("VERDICT_SERVER_ADDRESS", raising=False)
+    environ: dict[str, str] = {}
+    monkeypatch.setattr(cli.os, "environ", environ)
+
+    cli.load_conf()
+
+    assert environ["VERDICT_SERVER_ADDRESS"] == "from-file:443"

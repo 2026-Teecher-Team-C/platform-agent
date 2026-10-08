@@ -1,7 +1,9 @@
 import logging
+import os
 import plistlib
 import re
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,7 +20,15 @@ from agent.platform.base import (
 if TYPE_CHECKING:
     from agent.ca import CaFiles
 
-__all__ = ["app_dirs", "create_spool_file", "hardware_uuid", "install_shutdown_handler", "prepare_spool_dir"]
+__all__ = [
+    "agent_run_command",
+    "app_dirs",
+    "create_spool_file",
+    "hardware_uuid",
+    "install_shutdown_handler",
+    "os_integration",
+    "prepare_spool_dir",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -185,3 +195,13 @@ class MacIntegration:
     def remove_autostart(self) -> None:
         self._bootout()
         self.plist_path.unlink(missing_ok=True)
+
+
+def os_integration(dirs: AppDirs, home: Path) -> MacIntegration:
+    return MacIntegration(dirs, home, os.getuid())
+
+
+def agent_run_command() -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "run"]
+    return [sys.executable, "-m", "agent", "run"]
