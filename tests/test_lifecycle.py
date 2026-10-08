@@ -337,6 +337,33 @@ async def test_거부_뒤에_늦게_도착한_정책은_적용하지_않는다(e
     assert lifecycle.policy is EMPTY_POLICY
 
 
+async def test_수동_AGENT_TOKEN이_거부된_뒤에_늦게_도착한_정책은_적용하지_않는다(env):
+    # 수동 토큰은 거부돼도 token()이 그대로라, 거부 횟수만으로 늦은 응답을 걸러야 한다.
+    make, fake = env
+    fake.valid_tokens.add("manual")
+    lifecycle = await _바이패스_정책을_받은_lifecycle(make, fake, agent_token="manual")
+    original = lifecycle._client.get_policy
+    release = asyncio.Event()
+
+    async def slow_get_policy(token):
+        policy = await original(token)
+        await release.wait()
+        return policy
+
+    lifecycle._client.get_policy = slow_get_policy
+    in_flight = asyncio.create_task(lifecycle.refresh_policy_once())
+    await asyncio.sleep(0.05)
+    fake.valid_tokens.discard("manual")
+    await lifecycle.heartbeat_once()
+    assert lifecycle.policy is EMPTY_POLICY
+
+    release.set()
+    await in_flight
+
+    assert lifecycle.token() == "manual"
+    assert lifecycle.policy is EMPTY_POLICY
+
+
 async def test_갱신으로_바뀐_예전_토큰의_거부는_새_자격_증명을_지우지_않는다(env):
     make, fake = env
     now = [datetime.now(UTC)]
