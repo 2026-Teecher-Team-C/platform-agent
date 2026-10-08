@@ -242,3 +242,72 @@ async def test_수동_AGENT_TOKEN은_인증_거부에도_지워지지_않는다(
     await lifecycle.heartbeat_once()
 
     assert lifecycle.token() == "manual"
+
+
+async def _바이패스_정책을_받은_lifecycle(make, fake, **kwargs):
+    fake.policy = agent_pb2.GetPolicyResponse(
+        bypass_hosts=[agent_pb2.BypassHost(host="dl.google.com", category=SECURITY_UPDATE)]
+    )
+    lifecycle = make(**kwargs)
+    await lifecycle.start()
+    assert lifecycle.policy.bypass_category("dl.google.com") == SECURITY_UPDATE
+    return lifecycle
+
+
+async def test_하트비트에서_토큰이_거부되면_바이패스_정책을_지운다(env):
+    make, fake = env
+    lifecycle = await _바이패스_정책을_받은_lifecycle(make, fake, enrollment_token="enroll-ok")
+    fake.valid_tokens.clear()
+
+    await lifecycle.heartbeat_once()
+
+    assert lifecycle.policy is EMPTY_POLICY
+
+
+async def test_토큰_갱신에서_토큰이_거부되면_바이패스_정책을_지운다(env):
+    make, fake = env
+    now = [datetime.now(UTC)]
+    lifecycle = await _바이패스_정책을_받은_lifecycle(make, fake, clock=lambda: now[0], enrollment_token="enroll-ok")
+    fake.valid_tokens.clear()
+
+    now[0] += timedelta(hours=13)
+    await lifecycle.refresh_token_if_due()
+
+    assert lifecycle.token() == ""
+    assert lifecycle.policy is EMPTY_POLICY
+
+
+async def test_정책_수신에서_토큰이_거부되면_바이패스_정책을_지우고_재등록한다(env):
+    make, fake = env
+    lifecycle = await _바이패스_정책을_받은_lifecycle(make, fake, enrollment_token="enroll-ok")
+    fake.valid_tokens.clear()
+
+    await lifecycle.refresh_policy_once()
+
+    assert lifecycle.token() == ""
+    assert lifecycle.policy is EMPTY_POLICY
+
+
+async def test_수동_AGENT_TOKEN이_거부되면_바이패스_정책을_지운다(env):
+    make, fake = env
+    fake.valid_tokens.add("manual")
+    lifecycle = await _바이패스_정책을_받은_lifecycle(make, fake, agent_token="manual")
+    fake.valid_tokens.discard("manual")
+
+    await lifecycle.heartbeat_once()
+
+    assert lifecycle.token() == "manual"
+    assert lifecycle.policy is EMPTY_POLICY
+
+
+async def test_일시적_오류에는_바이패스_정책을_유지한다(env):
+    make, fake = env
+    now = [datetime.now(UTC)]
+    lifecycle = await _바이패스_정책을_받은_lifecycle(make, fake, clock=lambda: now[0], enrollment_token="enroll-ok")
+    fake.fail_code = grpc.StatusCode.UNAVAILABLE
+
+    now[0] += timedelta(hours=13)
+    await lifecycle.tick()
+    await lifecycle.refresh_policy_once()
+
+    assert lifecycle.policy.bypass_category("dl.google.com") == SECURITY_UPDATE

@@ -2,7 +2,7 @@
 
 판정 경로와 분리돼 있고, 여기서 무엇이 실패해도 다운로드는 막히는 쪽으로만 간다:
 - 토큰이 없으면 VerdictService가 UNAUTHENTICATED를 돌려주고 VerdictClient가 fail-close로 차단한다
-- 정책을 한 번도 못 받았으면 EMPTY_POLICY(바이패스 없음) — 모든 다운로드를 검사한다
+- 정책을 한 번도 못 받았거나 토큰이 거부되면 EMPTY_POLICY(바이패스 없음) — 모든 다운로드를 검사한다
 어떤 메서드도 예외를 밖으로 던지지 않는다. 실패는 로그로 남기고 다음 주기에 다시 시도한다.
 """
 
@@ -117,6 +117,9 @@ class AgentLifecycle:
             logger.error("자격 증명 저장 실패 — 이번 실행 동안은 메모리의 토큰을 쓴다: %s", exc)
 
     def _reject(self, token: str, operation: str) -> None:
+        # 거부된 토큰으로 받은 바이패스 정책을 계속 쓰면 검사 없이 통과시키게 된다. 수동 AGENT_TOKEN도 마찬가지로
+        # 비우고, 토큰이 다시 통하면 다음 정책 갱신에서 새로 받는다. 일시적 오류에서는 부르지 않는다
+        self._policy = EMPTY_POLICY
         if self._config.agent_token:
             logger.warning("%s: 수동 AGENT_TOKEN이 거부됐다", operation)
             return
@@ -157,5 +160,7 @@ class AgentLifecycle:
             return
         try:
             self._policy = await self._client.get_policy(token)
+        except AgentUnauthenticated:
+            self._reject(token, "정책 수신")
         except AgentServiceError as exc:
             logger.warning("정책 수신 실패 — 마지막으로 받은 정책을 유지한다: %s", exc)
