@@ -37,6 +37,7 @@ class AgentLifecycle:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._creds: Credentials | None = None
         self._rejected_token = ""
+        self._rejections = 0  # _reject가 정책을 비운 횟수. 응답을 기다리는 사이 거부가 있었는지 본다
         self._policy: Policy = EMPTY_POLICY
         self._tasks: list[asyncio.Task] = []
 
@@ -117,6 +118,11 @@ class AgentLifecycle:
             logger.error("자격 증명 저장 실패 — 이번 실행 동안은 메모리의 토큰을 쓴다: %s", exc)
 
     def _reject(self, token: str, operation: str) -> None:
+        if token != self.token():
+            # 응답을 기다리는 사이 토큰이 갱신·재등록으로 바뀌었다. 예전 토큰의 거부로 새 자격 증명을 지우지 않는다
+            logger.info("%s: 이미 바뀐 예전 토큰이 거부됐다 — 무시한다", operation)
+            return
+        self._rejections += 1
         # 거부된 토큰으로 받은 바이패스 정책을 계속 쓰면 검사 없이 통과시키게 된다. 수동 AGENT_TOKEN도 마찬가지로
         # 비우고, 토큰이 다시 통하면 다음 정책 갱신에서 새로 받는다. 일시적 오류에서는 부르지 않는다
         self._policy = EMPTY_POLICY
@@ -143,10 +149,11 @@ class AgentLifecycle:
             return
         if not self._creds.refresh_due(self._clock()):
             return
+        token = self._creds.agent_token
         try:
             creds = await self._client.refresh_token(self._creds)
         except AgentUnauthenticated:
-            self._reject(self._creds.agent_token, "토큰 갱신")
+            self._reject(token, "토큰 갱신")
             return
         except AgentServiceError as exc:
             logger.warning("토큰 갱신 실패 — 기존 토큰을 만료까지 쓴다: %s", exc)
@@ -158,9 +165,17 @@ class AgentLifecycle:
         token = self.token()
         if not token:
             return
+        rejections = self._rejections
         try:
-            self._policy = await self._client.get_policy(token)
+            policy = await self._client.get_policy(token)
         except AgentUnauthenticated:
             self._reject(token, "정책 수신")
+            return
         except AgentServiceError as exc:
             logger.warning("정책 수신 실패 — 마지막으로 받은 정책을 유지한다: %s", exc)
+            return
+        if rejections != self._rejections or token != self.token():
+            # 기다리는 사이 토큰이 거부됐거나 바뀌었다. 늦게 온 바이패스 정책으로 EMPTY_POLICY를 덮지 않는다
+            logger.info("정책 수신 중 토큰이 거부되거나 바뀌었다 — 받은 정책을 버린다")
+            return
+        self._policy = policy

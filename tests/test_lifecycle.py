@@ -311,3 +311,54 @@ async def test_일시적_오류에는_바이패스_정책을_유지한다(env):
     await lifecycle.refresh_policy_once()
 
     assert lifecycle.policy.bypass_category("dl.google.com") == SECURITY_UPDATE
+
+
+async def test_거부_뒤에_늦게_도착한_정책은_적용하지_않는다(env):
+    make, fake = env
+    lifecycle = await _바이패스_정책을_받은_lifecycle(make, fake, enrollment_token="enroll-ok")
+    original = lifecycle._client.get_policy
+    release = asyncio.Event()
+
+    async def slow_get_policy(token):
+        policy = await original(token)  # 서버는 아직 토큰을 받아 바이패스 정책을 돌려준다
+        await release.wait()
+        return policy
+
+    lifecycle._client.get_policy = slow_get_policy
+    in_flight = asyncio.create_task(lifecycle.refresh_policy_once())
+    await asyncio.sleep(0.05)
+    fake.valid_tokens.clear()
+    await lifecycle.heartbeat_once()
+    assert lifecycle.policy is EMPTY_POLICY
+
+    release.set()
+    await in_flight
+
+    assert lifecycle.policy is EMPTY_POLICY
+
+
+async def test_갱신으로_바뀐_예전_토큰의_거부는_새_자격_증명을_지우지_않는다(env):
+    make, fake = env
+    now = [datetime.now(UTC)]
+    lifecycle = await _바이패스_정책을_받은_lifecycle(make, fake, clock=lambda: now[0], enrollment_token="enroll-ok")
+    old = lifecycle.token()
+    original = lifecycle._client.get_policy
+    release = asyncio.Event()
+
+    async def late_get_policy(token):
+        await release.wait()
+        return await original(token)  # 그 사이 갱신으로 예전 토큰은 무효 → UNAUTHENTICATED
+
+    lifecycle._client.get_policy = late_get_policy
+    in_flight = asyncio.create_task(lifecycle.refresh_policy_once())
+    await asyncio.sleep(0.05)
+    now[0] += timedelta(hours=13)
+    await lifecycle.refresh_token_if_due()
+    new = lifecycle.token()
+    assert new != old and new in fake.valid_tokens
+
+    release.set()
+    await in_flight
+
+    assert lifecycle.token() == new
+    assert lifecycle.policy.bypass_category("dl.google.com") == SECURITY_UPDATE
