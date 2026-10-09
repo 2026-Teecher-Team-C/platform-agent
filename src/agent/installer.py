@@ -1,16 +1,17 @@
 """설치·제거 순서. OS를 모른다 — OS 작업은 OsIntegration(src/agent/platform/)이 한다.
 
 OS 설치 파일이 권한에 맞게 단계(phase)를 하나씩 부른다(설계 레포 2026-10-08 스펙 2.1, 3장).
-  prepare  (사용자)  CA 생성 → 등록 → 자동 실행 등록·시작(포트가 열리는지 확인)
+  prepare  (사용자)  포트 확인 → CA 생성 → 등록 → 자동 실행 등록·시작(포트가 열리는지 확인)
   trust    (관리자)  CA 신뢰
   activate (macOS 관리자, Windows 사용자)  시스템 프록시 켜기
 프록시는 맨 마지막이다. 먼저 켜면 에이전트가 뜨기 전까지 모든 웹이 끊긴다.
 
 한 단계 안에서 실패하면 실패한 단계 자신(일부만 됐을 수 있다)과 앞서 끝낸 단계를 역순으로 되돌리고
-InstallError를 낸다. 포트 충돌(PortBusyError)은 아무것도 바꾸기 전에 나므로 실패한 단계는 되돌리지 않는다. 앞 단계까지
-되돌리는 일은 OS 설치 파일이 uninstall을 불러서 한다. 제거는 activate → trust → prepare 순서이고,
-하나가 실패해도 멈추지 않고 남은 항목을 모은다. CA 파일은 신뢰를 푼 다음(prepare 되돌리기)에 지운다 —
-신뢰 해제에 쓰는 핑거프린트를 그 파일에서 계산하기 때문이다.
+InstallError를 낸다. 포트 충돌(PortBusyError)은 첫 단계라 CA·등록(1회용 토큰 소비) 전에 나므로
+실패한 단계는 되돌리지 않는다. 앞 단계까지 되돌리는 일은 OS 설치 파일이 uninstall을 불러서 한다.
+제거는 activate → trust → prepare 순서이고, 하나가 실패해도 멈추지 않고 남은 항목을 모은다.
+CA 파일은 신뢰를 푼 다음(prepare 되돌리기)에 지운다 — 신뢰 해제에 쓰는 핑거프린트를 그 파일에서
+계산하기 때문이다.
 """
 
 import logging
@@ -28,6 +29,7 @@ from agent.platform import PROXY_HOST, PROXY_PORT, AppDirs
 
 logger = logging.getLogger(__name__)
 
+STEP_PORT = "포트 확인"
 STEP_CA = "CA 생성"
 STEP_ENROLL = "등록"
 STEP_AUTOSTART = "자동 실행"
@@ -120,6 +122,12 @@ def wait_port(host: str, port: int, timeout: float = 15.0, interval: float = 0.2
 def build_steps(ctx: InstallContext) -> list[Step]:
     integration = ctx.integration
 
+    def check_port() -> None:
+        if ctx.port_open():
+            raise PortBusyError(
+                f"{PROXY_HOST}:{PROXY_PORT} 포트를 다른 프로그램이 쓰고 있다 — 그 프로그램을 끄고 다시 설치한다"
+            )
+
     def create_ca() -> None:
         ensure_ca(ctx.dirs.ca)
 
@@ -131,10 +139,6 @@ def build_steps(ctx: InstallContext) -> list[Step]:
             raise RuntimeError(f"데이터 폴더를 지우지 못했다: {ctx.dirs.data}")
 
     def start_agent() -> None:
-        if ctx.port_open() and not integration.autostart_installed():
-            raise PortBusyError(
-                f"{PROXY_HOST}:{PROXY_PORT} 포트를 다른 프로그램이 쓰고 있다 — 그 프로그램을 끄고 다시 설치한다"
-            )
         integration.install_autostart(ctx.run_command)
         if not ctx.wait_port():
             raise RuntimeError(f"에이전트가 {PROXY_HOST}:{PROXY_PORT} 포트를 열지 않았다")
@@ -157,6 +161,8 @@ def build_steps(ctx: InstallContext) -> list[Step]:
         integration.untrust_ca(ca)
 
     return [
+        # 우리 에이전트가 이미 자동 실행 중이면(재설치) 포트를 쓰는 게 정상이다
+        Step(STEP_PORT, Phase.PREPARE, integration.autostart_installed, check_port, lambda: None),
         Step(STEP_CA, Phase.PREPARE, lambda: load_ca(ctx.dirs.ca) is not None, create_ca, remove_files),
         Step(STEP_ENROLL, Phase.PREPARE, lambda: ctx.store.load() is not None, ctx.enroll, ctx.store.clear),
         Step(

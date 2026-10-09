@@ -9,6 +9,7 @@ from agent.installer import (
     INSTALL_ORDER,
     STEP_AUTOSTART,
     STEP_ENROLL,
+    STEP_PORT,
     STEP_PROXY,
     STEP_TRUST,
     UNINSTALL_ORDER,
@@ -171,10 +172,25 @@ def test_포트를_다른_프로그램이_쓰고_있으면_실패하고_되돌�
     with pytest.raises(InstallError) as info:
         install_phase(build_steps(context), Phase.PREPARE)
 
-    assert info.value.step == STEP_AUTOSTART
+    assert info.value.step == STEP_PORT
     assert "18080" in str(info.value)
     assert integration.calls == []
     assert store.load() is None
+    # 1회용 등록 토큰을 쓰기 전에 멈춘다
+    assert state["enrolls"] == 0
+    assert not context.dirs.data.exists()
+
+
+def test_재설치에서_우리_에이전트가_포트를_쓰고_있어도_성공한다(ctx):
+    context, integration, _, state = ctx
+    install_all(context)
+    state["listening"] = True
+    integration.calls.clear()
+
+    install_all(context)
+
+    assert integration.calls == []
+    assert state["enrolls"] == 1
 
 
 def test_설치한_적_없는_PC에서_제거해도_남은_항목이_없다(ctx):
