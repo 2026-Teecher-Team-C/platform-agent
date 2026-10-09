@@ -17,7 +17,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\..\dist
 OutputBaseFilename=teecher-agent-setup
 WizardStyle=modern
-SetupLogging=yes
+; 토큰이 매개변수로 넘어가므로 Inno 자체 로그를 끈다. 설치 단계 기록은 teecher-agent의 --log-file이 남긴다
+SetupLogging=no
 UninstallDisplayName=Teecher Agent
 CloseApplications=yes
 
@@ -43,7 +44,7 @@ begin
   TokenPage := CreateInputQueryPage(wpSelectDir,
     '에이전트 등록', '관리 콘솔에서 발급한 등록 토큰을 입력하세요.',
     '이미 등록된 PC를 다시 설치하는 경우에는 비워 둬도 됩니다.');
-  TokenPage.Add('등록 토큰:', False);
+  TokenPage.Add('등록 토큰:', True);
 end;
 
 function LogPath: String;
@@ -92,7 +93,7 @@ begin
      and RunPhase('install --phase activate', True) then
     Exit;
   Rollback;
-  MsgBox('설치를 마치지 못해 시스템 설정을 원래대로 되돌렸습니다.' + #13#10 +
+  SuppressibleMsgBox('설치를 마치지 못해 시스템 설정을 원래대로 되돌렸습니다.' + #13#10 +
          '기록: ' + LogPath + #13#10 +
-         '설정 → 앱에서 Teecher Agent를 제거한 뒤 다시 설치하세요.', mbError, MB_OK);
+         '설정 → 앱에서 Teecher Agent를 제거한 뒤 다시 설치하세요.', mbError, MB_OK, IDOK);
 end;
