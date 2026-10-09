@@ -3,6 +3,8 @@ import plistlib
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from agent.ca import CaFiles
 from agent.platform import AppDirs
 from agent.platform.macos import (
@@ -35,6 +37,36 @@ class FakeRun:
         if key in self.fail:
             raise subprocess.CalledProcessError(1, cmd)
         return self.outputs.get(key, "")
+
+
+class FakeKeychain:
+    """System 키체인과 관리자 신뢰 설정을 흉내 낸다. trust-settings-export는 파일에 plist를 쓴다."""
+
+    def __init__(self, present: bool, trusted: bool, fail: set[str] | None = None):
+        self.present = present
+        self.trusted = trusted
+        self.fail = fail or set()
+        self.commands: list[list[str]] = []
+
+    def __call__(self, cmd: list[str]) -> str:
+        self.commands.append(cmd)
+        verb = cmd[1]
+        if verb in self.fail:
+            raise subprocess.CalledProcessError(1, cmd)
+        if verb == "find-certificate":
+            if not self.present:
+                raise subprocess.CalledProcessError(44, cmd)
+            return f"SHA-256 hash: X\nSHA-1 hash: {CA.sha1}\n"
+        if verb == "trust-settings-export":
+            trust_list = {CA.sha1: {}} if self.trusted else {}
+            if not trust_list:
+                raise subprocess.CalledProcessError(1, cmd)  # 관리자 신뢰 설정이 하나도 없으면 실패한다
+            Path(cmd[-1]).write_bytes(plistlib.dumps({"trustList": trust_list, "trustVersion": 1}))
+        elif verb == "remove-trusted-cert":
+            self.trusted = False
+        elif verb == "delete-certificate":
+            self.present = False
+        return ""
 
 
 def mac(tmp_path, run) -> MacIntegration:
@@ -113,24 +145,67 @@ def test_CA를_System_키체인에_신뢰_루트로_넣는다(tmp_path):
     ]
 
 
-def test_CA_신뢰_여부는_SHA1_핑거프린트로_찾는다(tmp_path):
-    find = ("/usr/bin/security", "find-certificate", "-a", "-Z", "-c", "mitmproxy", SYSTEM_KEYCHAIN)
+@pytest.mark.parametrize(
+    ("present", "trusted", "expected"),
+    [(True, True, True), (True, False, False), (False, False, False)],
+)
+def test_CA_신뢰_여부는_관리자_신뢰_설정의_SHA1로_본다(tmp_path, present, trusted, expected):
+    # 인증서가 키체인에 있어도 신뢰 설정이 없으면 HTTPS가 깨진다 — 재설치가 trust를 건너뛰면 안 된다
+    run = FakeKeychain(present, trusted)
 
-    assert mac(tmp_path, FakeRun({find: f"SHA-256 hash: X\nSHA-1 hash: {CA.sha1}\n"})).ca_trusted(CA)
-    assert not mac(tmp_path, FakeRun({find: "SHA-1 hash: 0000\n"})).ca_trusted(CA)
-    assert not mac(tmp_path, FakeRun(fail={find})).ca_trusted(CA)
+    assert mac(tmp_path, run).ca_trusted(CA) is expected
+
+
+def test_신뢰_설정을_내보낼_때_관리자_설정을_임시_파일로_받는다(tmp_path):
+    run = FakeKeychain(present=True, trusted=True)
+
+    mac(tmp_path, run).ca_trusted(CA)
+
+    export = next(c for c in run.commands if c[1] == "trust-settings-export")
+    assert export[:3] == ["/usr/bin/security", "trust-settings-export", "-d"]
+    assert not Path(export[3]).exists()  # 다 읽은 뒤 지운다
 
 
 def test_CA_신뢰_해제는_신뢰_설정을_지우고_핑거프린트로_삭제한다(tmp_path):
-    find = ("/usr/bin/security", "find-certificate", "-a", "-Z", "-c", "mitmproxy", SYSTEM_KEYCHAIN)
-    run = FakeRun({find: f"SHA-1 hash: {CA.sha1}\n"})
+    run = FakeKeychain(present=True, trusted=True)
 
     mac(tmp_path, run).untrust_ca(CA)
 
-    assert run.commands[1:] == [
-        ["/usr/bin/security", "remove-trusted-cert", "-d", str(CA.cert_pem)],
-        ["/usr/bin/security", "delete-certificate", "-Z", CA.sha1, SYSTEM_KEYCHAIN],
-    ]
+    assert ["/usr/bin/security", "remove-trusted-cert", "-d", str(CA.cert_pem)] in run.commands
+    assert ["/usr/bin/security", "delete-certificate", "-Z", CA.sha1, SYSTEM_KEYCHAIN] in run.commands
+    assert not run.present
+
+
+def test_신뢰_설정_삭제가_실패해도_인증서는_핑거프린트로_지운다(tmp_path):
+    run = FakeKeychain(present=True, trusted=True, fail={"remove-trusted-cert"})
+
+    mac(tmp_path, run).untrust_ca(CA)
+
+    assert ["/usr/bin/security", "delete-certificate", "-Z", CA.sha1, SYSTEM_KEYCHAIN] in run.commands
+    assert not run.present
+
+
+def test_신뢰_설정만_없어도_키체인에_남은_인증서를_지운다(tmp_path):
+    run = FakeKeychain(present=True, trusted=False)
+
+    mac(tmp_path, run).untrust_ca(CA)
+
+    assert not run.present
+
+
+def test_인증서가_남으면_신뢰_해제는_실패한다(tmp_path):
+    run = FakeKeychain(present=True, trusted=True, fail={"delete-certificate"})
+
+    with pytest.raises(RuntimeError, match=CA.sha1):
+        mac(tmp_path, run).untrust_ca(CA)
+
+
+def test_키체인에_없는_CA는_지우지_않는다(tmp_path):
+    run = FakeKeychain(present=False, trusted=False)
+
+    mac(tmp_path, run).untrust_ca(CA)
+
+    assert [c[1] for c in run.commands] == ["find-certificate"]
 
 
 def test_LaunchAgent는_로그인_시_실행하고_죽으면_다시_띄운다(tmp_path):

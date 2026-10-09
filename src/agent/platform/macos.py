@@ -4,6 +4,7 @@ import plistlib
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -125,22 +126,45 @@ class MacIntegration:
         self._run = run
         self.plist_path = home / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
 
-    def ca_trusted(self, ca: "CaFiles") -> bool:
+    def _ca_present(self, ca: "CaFiles") -> bool:
         try:
             out = self._run([SECURITY, "find-certificate", "-a", "-Z", "-c", "mitmproxy", SYSTEM_KEYCHAIN])
         except subprocess.CalledProcessError:
             return False  # 이름이 맞는 인증서가 하나도 없으면 실패한다
         return f"SHA-1 hash: {ca.sha1}" in out
 
+    def _admin_trusted_sha1s(self) -> set[str]:
+        # 관리자 신뢰 설정의 trustList 키가 인증서 SHA-1(대문자 16진수)이다
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "trust.plist"
+            try:
+                self._run([SECURITY, "trust-settings-export", "-d", str(path)])
+            except subprocess.CalledProcessError:
+                return set()  # 관리자 신뢰 설정이 하나도 없으면 실패한다
+            with path.open("rb") as f:
+                return set(plistlib.load(f).get("trustList", {}))
+
+    def ca_trusted(self, ca: "CaFiles") -> bool:
+        # 키체인에 있어도 신뢰 설정이 없으면 HTTPS가 깨진다 — 둘 다 봐야 재설치가 trust를 건너뛰지 않는다
+        return self._ca_present(ca) and ca.sha1 in self._admin_trusted_sha1s()
+
     def trust_ca(self, ca: "CaFiles") -> None:
         self._run([SECURITY, "add-trusted-cert", "-d", "-r", "trustRoot", "-k", SYSTEM_KEYCHAIN, str(ca.cert_pem)])
 
     def untrust_ca(self, ca: "CaFiles") -> None:
-        if not self.ca_trusted(ca):
+        if not self._ca_present(ca):
             return
-        self._run([SECURITY, "remove-trusted-cert", "-d", str(ca.cert_pem)])
+        try:
+            self._run([SECURITY, "remove-trusted-cert", "-d", str(ca.cert_pem)])
+        except subprocess.CalledProcessError:
+            logger.warning("CA 신뢰 설정을 지우지 못했다. 인증서를 지워 신뢰를 끊는다")
         # 같은 이름의 개발용 mitmproxy CA를 지우지 않도록 핑거프린트로 지운다(스펙 4.1)
-        self._run([SECURITY, "delete-certificate", "-Z", ca.sha1, SYSTEM_KEYCHAIN])
+        try:
+            self._run([SECURITY, "delete-certificate", "-Z", ca.sha1, SYSTEM_KEYCHAIN])
+        except subprocess.CalledProcessError:
+            pass  # 남았는지는 아래에서 확인한다
+        if self._ca_present(ca):
+            raise RuntimeError(f"System 키체인에서 CA를 지우지 못했다: SHA-1 {ca.sha1}")
 
     def _services(self) -> list[str]:
         return parse_network_services(self._run([NETWORKSETUP, "-listallnetworkservices"]))
