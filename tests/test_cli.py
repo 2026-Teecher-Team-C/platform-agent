@@ -4,6 +4,7 @@ import pytest
 from test_installer import CREDS, FakeIntegration
 
 from agent import cli
+from agent.conf_file import ConfError
 from agent.credentials import MemoryStore
 
 
@@ -127,6 +128,39 @@ def test_로그_파일에_단계를_남긴다(env, tmp_path):
 
     text = log.read_text(encoding="utf-8")
     assert "설치: 등록" in text
+    assert "enroll-ok" not in text
+
+
+def test_agent_conf_오류도_설치_기록에_남긴다(env, monkeypatch, tmp_path):
+    # Windows 설치 파일은 stderr를 보여 주지 않는다 — 원인은 설치 기록에서만 찾을 수 있다
+    run, _, _, _ = env
+    conf = tmp_path / "agent.conf"
+    conf.write_text("NOT_A_KEY=1\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "default_conf_path", lambda: conf)
+    log = tmp_path / "install.log"
+
+    with pytest.raises(ConfError):
+        run("--log-file", str(log), "install", "--phase", "prepare", "--enrollment-token", "enroll-ok")
+
+    text = log.read_text(encoding="utf-8")
+    assert "NOT_A_KEY" in text
+    assert "enroll-ok" not in text
+
+
+def test_예상하지_못한_예외도_설치_기록에_남기고_다시_던진다(env, monkeypatch, tmp_path):
+    run, _, _, _ = env
+
+    def broken_store(kind):
+        raise RuntimeError("키체인 백엔드 없음")
+
+    monkeypatch.setattr(cli, "make_store", broken_store)
+    log = tmp_path / "install.log"
+
+    with pytest.raises(RuntimeError, match="키체인"):
+        run("--log-file", str(log), "install", "--phase", "prepare", "--enrollment-token", "enroll-ok")
+
+    text = log.read_text(encoding="utf-8")
+    assert "키체인 백엔드 없음" in text
     assert "enroll-ok" not in text
 
 

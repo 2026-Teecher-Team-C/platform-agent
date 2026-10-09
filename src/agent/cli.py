@@ -140,19 +140,25 @@ def _self_test() -> int:
 
 def main(argv: list[str] | None = None, integration_factory=os_integration) -> int:
     args = _parser().parse_args(argv)
-    load_conf()
-    if args.command == "self-test":
-        return _self_test()
-    dirs = app_dirs(args.home)
     if args.command == "run":
         from agent.runner import serve, setup_logging
 
+        load_conf()
+        dirs = app_dirs(args.home)
         setup_logging(dirs.logs)
         asyncio.run(serve(dirs))
         return 0
+    # agent.conf 오류도 설치 기록에 남도록 먼저 붙인다. Windows 설치 파일은 stderr를 보여 주지 않는다
     handler = _log_to(args.log_file)
     try:
-        return _dispatch(args, dirs, integration_factory)
+        load_conf()
+        if args.command == "self-test":
+            return _self_test()
+        return _dispatch(args, app_dirs(args.home), integration_factory)
+    except Exception:
+        # 명령 인자는 남기지 않는다 — 등록 토큰이 들어 있다
+        logger.exception("%s 실패", args.command)
+        raise
     finally:
         # 떼지 않으면 Windows에서 파일이 열린 채 남고, 다음 호출에 같은 줄이 겹쳐 찍힌다
         if handler is not None:
