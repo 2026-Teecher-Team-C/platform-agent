@@ -1,5 +1,8 @@
+import asyncio
 import os
+import signal
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,3 +32,27 @@ def create_spool_file(spool_dir: Path) -> SpoolFile:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, 0o600)
     return SpoolFile(path=path, fd=fd)
+
+
+PROXY_HOST = "127.0.0.1"
+PROXY_PORT = 18080
+
+
+class UnsupportedPlatformError(RuntimeError):
+    """설치·OS 연동을 지원하지 않는 OS(리눅스)."""
+
+
+@dataclass(frozen=True)
+class AppDirs:
+    data: Path  # 이 아래를 통째로 지우면 에이전트가 남긴 파일(CA 개인 키 포함)이 모두 사라진다
+    logs: Path
+
+    @property
+    def ca(self) -> Path:
+        # mitmproxy confdir. 개발용 ~/.mitmproxy와 섞이지 않게 따로 둔다
+        return self.data / "mitmproxy"
+
+
+def install_shutdown_handler(loop: asyncio.AbstractEventLoop, callback: Callable[[], None]) -> None:
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, callback)

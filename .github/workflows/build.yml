@@ -1,0 +1,69 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "packaging/**"
+      - ".github/workflows/build.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/**"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+          - os: macos-latest
+            name: macos
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.12"
+      - run: ./scripts/gen_proto.sh
+      - run: uv run --group build pyinstaller --noconfirm --distpath dist --workpath build packaging/teecher-agent.spec
+      - name: self-test
+        run: |
+          if [ "${{ matrix.name }}" = windows ]; then dist/teecher-agent/teecher-agent.exe self-test && test -f dist/teecher-agent/teecher-agentw.exe; else dist/teecher-agent/teecher-agent self-test; fi
+      - name: schtasks XML check
+        if: matrix.name == 'windows'
+        # 자동 실행 작업 XML을 실제 작업 스케줄러가 받는지 확인한다. MSYS_NO_PATHCONV는 /Create 같은 인자를 경로로 바꾸지 않게 한다
+        run: |
+          PYTHONPATH=src uv run python -c 'from pathlib import Path; from agent.platform.windows import _current_user, task_xml; Path("task-check.xml").write_text(task_xml([r"C:\Program Files\Teecher Agent\teecher-agentw.exe", "run"], _current_user()), encoding="utf-16")'
+          MSYS_NO_PATHCONV=1 schtasks /Create /F /TN TeecherCiCheck /XML task-check.xml
+          MSYS_NO_PATHCONV=1 schtasks /Delete /F /TN TeecherCiCheck
+      - name: Inno Setup
+        if: matrix.name == 'windows'
+        run: |
+          choco install innosetup -y --no-progress
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DAppVersion=0.1.0 packaging/windows/teecher-agent.iss
+      - uses: actions/upload-artifact@v4
+        if: matrix.name == 'windows'
+        with:
+          name: teecher-agent-setup
+          path: dist/teecher-agent-setup.exe
+      - name: pkg
+        if: matrix.name == 'macos'
+        run: packaging/macos/build-pkg.sh
+      - uses: actions/upload-artifact@v4
+        if: matrix.name == 'macos'
+        with:
+          name: teecher-agent-pkg
+          path: dist/teecher-agent.pkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teecher-agent-${{ matrix.name }}
+          path: dist/teecher-agent

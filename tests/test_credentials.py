@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from keyring.errors import PasswordDeleteError
 
 from agent import credentials
 from agent.credentials import Credentials, CredentialStoreError, KeyringStore, MemoryStore, make_store
@@ -52,6 +53,14 @@ class FakeBackend:
         if self.fail:
             raise RuntimeError("keychain locked")
         self.data[(service, username)] = value
+
+    def delete_password(self, service: str, username: str) -> None:
+        self.calls.append("delete_password")
+        if self.fail:
+            raise RuntimeError("keychain locked")
+        if (service, username) not in self.data:
+            raise PasswordDeleteError("not found")
+        del self.data[(service, username)]
 
 
 def fake_backend(qualified_name: str, chained: list | None = None) -> FakeBackend:
@@ -214,3 +223,52 @@ def test_허용_목록의_이름은_실제_keyring_백엔드_클래스다(name):
     cls = getattr(module, class_name)
 
     assert f"{cls.__module__}.{cls.__qualname__}" == name
+
+
+def test_MemoryStore를_비운다():
+    store = MemoryStore()
+    store.save(creds())
+
+    store.clear()
+
+    assert store.load() is None
+
+
+def test_KeyringStore를_비운다(fake_keyring):
+    KeyringStore().save(creds())
+
+    KeyringStore().clear()
+
+    assert KeyringStore().load() is None
+
+
+def test_KeyringStore는_없는_항목을_비워도_오류가_아니다(fake_keyring):
+    KeyringStore().clear()
+
+
+def test_KeyringStore_삭제_실패는_CredentialStoreError다(fake_keyring):
+    KeyringStore().save(creds())
+    fake_keyring.fail = True
+
+    with pytest.raises(CredentialStoreError):
+        KeyringStore().clear()
+
+
+def test_평문_백엔드에서는_비우지_않는다(fake_keyring):
+    fake_keyring.backend = fake_backend(PLAINTEXT)
+
+    with pytest.raises(CredentialStoreError):
+        KeyringStore().clear()
+    assert fake_keyring.backend.calls == []
+
+
+def test_보안_저장소_백엔드가_있는지_알려준다(fake_keyring):
+    assert credentials.secure_backend_available()
+    fake_keyring.backend = fake_backend(PLAINTEXT)
+    assert not credentials.secure_backend_available()
+
+
+def test_보안_저장소_백엔드_이름을_알려준다(fake_keyring):
+    assert credentials.secure_backend_name() in credentials.SECURE_BACKENDS
+    fake_keyring.backend = fake_backend(PLAINTEXT)
+    assert credentials.secure_backend_name() is None

@@ -2,10 +2,11 @@ import os
 import re
 import stat
 import sys
+from pathlib import Path
 
 import pytest
 
-from agent.platform import create_spool_file, prepare_spool_dir
+from agent.platform import AppDirs, app_dirs, create_spool_file, prepare_spool_dir
 
 UUID_TMP = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$")
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX 권한 비트")
@@ -56,3 +57,32 @@ def test_Windows_스풀_파일은_색인_제외_속성을_가진다(spool_dir):
 
     assert spool_dir.stat().st_file_attributes & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED
     assert path.stat().st_file_attributes & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED
+
+
+def test_AppDirs의_CA_폴더는_데이터_폴더_아래_mitmproxy다(tmp_path):
+    dirs = AppDirs(data=tmp_path / "d", logs=tmp_path / "l")
+
+    assert dirs.ca == tmp_path / "d" / "mitmproxy"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS 경로")
+def test_macOS_전용_폴더(tmp_path):
+    dirs = app_dirs(tmp_path)
+
+    assert dirs.data == tmp_path / "Library" / "Application Support" / "Teecher"
+    assert dirs.logs == tmp_path / "Library" / "Logs" / "Teecher"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows 경로")
+def test_Windows_전용_폴더(tmp_path):
+    dirs = app_dirs(tmp_path)
+
+    assert dirs.data == tmp_path / "AppData" / "Local" / "Teecher"
+    assert dirs.logs == dirs.data / "logs"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows 경로")
+def test_Windows_기본_홈이면_LOCALAPPDATA를_따른다(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Redirected"))
+
+    assert app_dirs(Path.home()).data == tmp_path / "Redirected" / "Teecher"
