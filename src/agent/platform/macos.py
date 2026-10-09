@@ -178,6 +178,10 @@ class MacIntegration:
             self._ours("-getwebproxy", s) and self._ours("-getsecurewebproxy", s) for s in services
         )
 
+    def proxy_points_to_us(self) -> bool:
+        # 한 서비스라도 웹 또는 보안 웹 프록시가 우리를 가리키면 True — 자동 실행을 지워도 되는지 판단한다
+        return any(self._ours("-getwebproxy", s) or self._ours("-getsecurewebproxy", s) for s in self._services())
+
     def _warn_if_foreign_proxy(self, service: str) -> None:
         for getter in ("-getwebproxy", "-getsecurewebproxy"):
             enabled, server, port = parse_proxy(self._run([NETWORKSETUP, getter, service]))

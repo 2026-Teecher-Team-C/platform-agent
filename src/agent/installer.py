@@ -57,6 +57,8 @@ class OsIntegration(Protocol):
 
     def proxy_is_ours(self) -> bool: ...
 
+    def proxy_points_to_us(self) -> bool: ...
+
     def enable_proxy(self) -> None: ...
 
     def disable_proxy_if_ours(self) -> None: ...
@@ -148,7 +150,8 @@ def build_steps(ctx: InstallContext) -> list[Step]:
             raise RuntimeError(f"에이전트가 {PROXY_HOST}:{PROXY_PORT} 포트를 열지 않았다")
 
     def stop_agent() -> None:
-        if integration.proxy_is_ours():
+        # 한 곳이라도 우리를 가리키면 지우지 않는다(설치 뒤 추가된 서비스, 끄기 중간 실패)
+        if integration.proxy_points_to_us():
             raise RuntimeError("시스템 프록시가 아직 켜져 있어 자동 실행을 지우지 않는다 — activate를 먼저 되돌린다")
         integration.remove_autostart()
 

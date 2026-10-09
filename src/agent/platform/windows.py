@@ -206,6 +206,9 @@ class WindowsIntegration:
     def proxy_is_ours(self) -> bool:
         return self._read_proxy() == (1, PROXY_SERVER)
 
+    def proxy_points_to_us(self) -> bool:
+        return self.proxy_is_ours()  # HKCU 설정이 하나뿐이라 같다
+
     def enable_proxy(self) -> None:
         import winreg
 

@@ -135,6 +135,31 @@ def test_모든_활성_서비스가_우리_프록시여야_켜진_것으로_본�
     assert not mac(tmp_path, FakeRun(outputs)).proxy_is_ours()
 
 
+def test_한_서비스라도_우리_프록시면_가리키는_것으로_본다(tmp_path):
+    # 설치 뒤 추가된 USB 서비스는 우리 것이 아니다 — proxy_is_ours는 False, proxy_points_to_us는 True
+    ns = "/usr/sbin/networksetup"
+    outputs = {(ns, "-listallnetworkservices"): SERVICES}
+    for getter in ("-getwebproxy", "-getsecurewebproxy"):
+        outputs[(ns, getter, "Wi-Fi")] = OURS
+        outputs[(ns, getter, "USB 10/100/1000 LAN")] = OFF
+    integration = mac(tmp_path, FakeRun(outputs))
+    assert not integration.proxy_is_ours()
+    assert integration.proxy_points_to_us()
+
+    # 보안 웹 프록시만 남아도 가리키는 것이다
+    outputs[(ns, "-getwebproxy", "Wi-Fi")] = OFF
+    assert mac(tmp_path, FakeRun(outputs)).proxy_points_to_us()
+
+
+def test_우리_프록시가_하나도_없으면_가리키지_않는다(tmp_path):
+    ns = "/usr/sbin/networksetup"
+    outputs = {(ns, "-listallnetworkservices"): SERVICES}
+    for svc in ("Wi-Fi", "USB 10/100/1000 LAN"):
+        outputs[(ns, "-getwebproxy", svc)] = OTHER
+        outputs[(ns, "-getsecurewebproxy", svc)] = OFF
+    assert not mac(tmp_path, FakeRun(outputs)).proxy_points_to_us()
+
+
 def test_CA를_System_키체인에_신뢰_루트로_넣는다(tmp_path):
     run = FakeRun()
 

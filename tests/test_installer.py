@@ -56,6 +56,9 @@ class FakeIntegration:
     def proxy_is_ours(self) -> bool:
         return self.proxy
 
+    def proxy_points_to_us(self) -> bool:
+        return self.proxy
+
     def enable_proxy(self) -> None:
         self._call("enable_proxy")
         self.proxy = True
@@ -314,6 +317,20 @@ def test_프록시를_끄지_못하면_제거해도_자동_실행을_남긴다(c
 
     assert uninstall_all(context) == [STEP_PROXY, STEP_AUTOSTART]
     assert integration.proxy is True
+    assert integration.autostart is True
+    assert "remove_autostart" not in integration.calls
+
+
+def test_일부_서비스만_우리_프록시여도_자동_실행을_지우지_않는다(ctx, monkeypatch):
+    # 설치 뒤 추가된 서비스가 있어 proxy_is_ours는 False지만 한 곳은 아직 우리를 가리킨다
+    context, integration, _, _ = ctx
+    install_all(context)
+    monkeypatch.setattr(integration, "proxy_is_ours", lambda: False)
+    # 프록시 끄기가 아무것도 못 끈 채 실패한 상황 — 한 곳은 그대로 켜져 있다
+
+    integration.fail_on = "disable_proxy_if_ours"
+
+    assert uninstall_all(context) == [STEP_PROXY, STEP_AUTOSTART]
     assert integration.autostart is True
     assert "remove_autostart" not in integration.calls
 

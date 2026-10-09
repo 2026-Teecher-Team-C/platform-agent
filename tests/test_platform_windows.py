@@ -179,3 +179,14 @@ def test_다른_프록시가_켜져_있으면_경고하고_덮어쓴다(test_key
 
     assert "corp-proxy:3128" in caplog.text
     assert integration.proxy_is_ours()
+
+
+def test_윈도우_proxy_points_to_us는_proxy_is_ours와_같다(monkeypatch):
+    # 레지스트리 없이 _read_proxy만 바꿔 어느 OS에서든 돈다
+    integration = WindowsIntegration(run=FakeRun(), settings_key="x", notify=lambda: None)
+    monkeypatch.setattr(integration, "_read_proxy", lambda: (1, PROXY_SERVER))
+    assert integration.proxy_points_to_us()
+    monkeypatch.setattr(integration, "_read_proxy", lambda: (0, PROXY_SERVER))
+    assert not integration.proxy_points_to_us()
+    monkeypatch.setattr(integration, "_read_proxy", lambda: (1, "corp-proxy:3128"))
+    assert not integration.proxy_points_to_us()
