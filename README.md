@@ -54,8 +54,26 @@ OS에 의존하는 코드는 `src/agent/platform/`(linux / macos / windows)에�
 
 ## 배포
 
-최종 배포는 설치 파일(PyInstaller → `.pkg` / `.msi`)이다. 설치 시 CA 등록, 시스템 프록시 설정, 서비스 등록을
-한다 — 설치 파일은 아직 만들지 않았다.
+설치 파일은 `build` 워크플로가 만든다. 수동 실행(`workflow_dispatch`, 워크플로가 기본 브랜치에 있어야 한다)과 `v*` 태그에서 돌고,
+`packaging/`·`src/`·`pyproject.toml`·`uv.lock`·`build.yml`을 바꾸는 PR에서도 돈다.
+
+| OS | 파일 | 설치 | 제거 |
+|---|---|---|---|
+| Windows x64 | `teecher-agent-setup.exe` | 실행 → SmartScreen "추가 정보 → 실행" → 등록 토큰 입력 | 설정 → 앱 → Teecher Agent |
+| macOS arm64 | `teecher-agent.pkg` | 우클릭 → 열기 → 등록 토큰 입력(대화상자) | `"/Applications/Teecher Agent/uninstall.sh"` |
+
+설치하면 전용 CA 신뢰, 시스템 프록시(`127.0.0.1:18080`), 로그인 시 자동 실행, 에이전트 등록이 끝난다.
+상태 확인: `teecher-agent status`. 설치 기록: Windows `%TEMP%\teecher-install.log`, macOS `~/Library/Logs/teecher-install.log`.
+서버 주소는 설치 폴더의 `agent.conf`에 있고, 같은 이름의 환경변수가 있으면 그 값이 우선한다.
+
+- **macOS 제거:** `sudo` 없이 실행한다. 관리자 암호가 필요한 곳에서 스스로 묻는다. 하나라도 실패하면 앱 폴더를 남기므로 다시 실행할 수 있다
+- **Windows 무인 설치:** `/SUPPRESSMSGBOXES`가 필요하다. 토큰은 설치 파라미터로 넘기므로 Inno 자체 로그는 꺼 두었다. `/LOG`를 주면 로그가 다시 켜져 토큰 파라미터가 기록되니 쓰지 않는다. 단계 기록은 `--log-file`로 `%TEMP%\teecher-install.log`에 남는다
+- **업그레이드:** 실행 중인 에이전트를 먼저 내리고(Windows는 `PrepareToInstall`에서 작업 종료, macOS는 `postinstall`에서 `kr.teecher.agent` bootout) 파일을 덮은 뒤 새 바이너리를 띄운다. 키체인에 자격 증명이 있으면 토큰을 비워 둘 수 있다
+- **실패 시 되돌리기:** 이번 실행에서 끝난 단계만 역순으로 되돌린다. 실패한 단계는 자기 하위 작업을 스스로 되돌린다. 18080 포트를 다른 프로그램이 쓰고 있으면 아무것도 바꾸기 전에 실패한다. 업그레이드가 `trust`·`activate`에서 실패하면 `prepare`도 되돌려 저장된 자격 증명이 지워지므로 새 토큰이 필요하다
+- 설치 전에 다른 프록시가 켜져 있으면 경고를 로그에 남기고 덮어쓴다
+
+로컬 빌드: `uv run --group build pyinstaller --noconfirm --distpath dist --workpath build packaging/teecher-agent.spec`
+빌드 결과 확인: `dist/teecher-agent/teecher-agent self-test` (`OK self-test (keyring: <backend>)`)
 
 ## proto 올리기
 
