@@ -13,3 +13,4 @@ src/teecher/
 build/
 dist/
 *.spec
+!packaging/*.spec

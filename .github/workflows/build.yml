@@ -1,0 +1,37 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+          - os: macos-latest
+            name: macos
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.12"
+      - run: ./scripts/gen_proto.sh
+      - run: uv run --group build pyinstaller --noconfirm --distpath dist --workpath build packaging/teecher-agent.spec
+      - name: self-test
+        run: |
+          if [ "${{ matrix.name }}" = windows ]; then dist/teecher-agent/teecher-agent.exe self-test; else dist/teecher-agent/teecher-agent self-test; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teecher-agent-${{ matrix.name }}
+          path: dist/teecher-agent

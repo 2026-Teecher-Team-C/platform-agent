@@ -17,6 +17,9 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "ruff>=0.13",
 ]
+build = [
+    "pyinstaller>=6.11",
+]
 
 [tool.uv]
 package = false
