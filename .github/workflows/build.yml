@@ -48,6 +48,14 @@ jobs:
         with:
           name: teecher-agent-setup
           path: dist/teecher-agent-setup.exe
+      - name: pkg
+        if: matrix.name == 'macos'
+        run: packaging/macos/build-pkg.sh
+      - uses: actions/upload-artifact@v4
+        if: matrix.name == 'macos'
+        with:
+          name: teecher-agent-pkg
+          path: dist/teecher-agent.pkg
       - uses: actions/upload-artifact@v4
         with:
           name: teecher-agent-${{ matrix.name }}
