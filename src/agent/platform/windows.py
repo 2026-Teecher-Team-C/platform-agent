@@ -115,14 +115,15 @@ def notify_proxy_change() -> None:
 def task_xml(command: list[str], user: str) -> str:
     exe, *args = command
     # RestartOnFailure는 시작 실패에만 걸린다. 떠 있던 에이전트가 죽으면 1분 반복 트리거가 다시 띄우고,
-    # 이미 떠 있으면 IgnoreNew가 두 번째 실행을 막는다
+    # 이미 떠 있으면 IgnoreNew가 두 번째 실행을 막는다. 트리거 자식은 스키마 순서(Enabled, Repetition, UserId)를 지킨다.
+    # 우선순위 기본값 7은 보통 아래라, 모든 웹 트래픽이 지나가는 프록시는 4(보통)로 돌린다
     return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers>
     <LogonTrigger>
       <Enabled>true</Enabled>
-      <UserId>{escape(user)}</UserId>
       <Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
+      <UserId>{escape(user)}</UserId>
     </LogonTrigger>
   </Triggers>
   <Principals>
@@ -137,6 +138,7 @@ def task_xml(command: list[str], user: str) -> str:
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>4</Priority>
   </Settings>
   <Actions Context="Author">
     <Exec>

@@ -38,6 +38,13 @@ jobs:
       - name: self-test
         run: |
           if [ "${{ matrix.name }}" = windows ]; then dist/teecher-agent/teecher-agent.exe self-test && test -f dist/teecher-agent/teecher-agentw.exe; else dist/teecher-agent/teecher-agent self-test; fi
+      - name: schtasks XML check
+        if: matrix.name == 'windows'
+        # 자동 실행 작업 XML을 실제 작업 스케줄러가 받는지 확인한다. MSYS_NO_PATHCONV는 /Create 같은 인자를 경로로 바꾸지 않게 한다
+        run: |
+          PYTHONPATH=src uv run python -c 'from pathlib import Path; from agent.platform.windows import _current_user, task_xml; Path("task-check.xml").write_text(task_xml([r"C:\Program Files\Teecher Agent\teecher-agentw.exe", "run"], _current_user()), encoding="utf-16")'
+          MSYS_NO_PATHCONV=1 schtasks /Create /F /TN TeecherCiCheck /XML task-check.xml
+          MSYS_NO_PATHCONV=1 schtasks /Delete /F /TN TeecherCiCheck
       - name: Inno Setup
         if: matrix.name == 'windows'
         run: |

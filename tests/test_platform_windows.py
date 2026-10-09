@@ -44,6 +44,21 @@ def test_작업은_로그온에_시작하고_1분마다_꺼져_있으면_다시_
     assert exec_.find("t:Arguments", NS).text == "run"
 
 
+def test_작업은_보통_우선순위로_돈다():
+    # 기본값 7은 보통 아래다 — 모든 웹 트래픽이 지나가는 프록시가 느려진다
+    root = ET.fromstring(task_xml([r"C:\T\teecher-agentw.exe", "run"], r"PC\hang"))
+
+    assert root.find("t:Settings/t:Priority", NS).text == "4"
+
+
+def test_로그온_트리거_자식은_스키마_순서다():
+    # 작업 스케줄러 스키마는 Enabled, Repetition, UserId 순서의 sequence다 — 어기면 schtasks /Create가 거부한다
+    root = ET.fromstring(task_xml([r"C:\T\teecher-agentw.exe", "run"], r"PC\hang"))
+
+    trigger = root.find("t:Triggers/t:LogonTrigger", NS)
+    assert [child.tag.split("}")[1] for child in trigger] == ["Enabled", "Repetition", "UserId"]
+
+
 def test_작업_XML은_경로의_특수문자를_이스케이프한다():
     xml = task_xml([r"C:\A & B\teecher-agentw.exe", "run"], r"PC\a<b")
 
