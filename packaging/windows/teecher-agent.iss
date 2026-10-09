@@ -38,6 +38,8 @@ Filename: "{app}\teecher-agent.exe"; Parameters: "uninstall --phase prepare"; Fl
 [Code]
 var
   TokenPage: TInputQueryWizardPage;
+  { 설치 단계가 실패해 되돌렸으면 Setup 종료 코드를 0이 아니게 한다(무인 설치가 실패를 알 수 있게) }
+  InstallFailed: Boolean;
 
 procedure InitializeWizard;
 begin
@@ -110,6 +112,7 @@ begin
     DoneActivate := RunPhase('install --phase activate', True);
   if DoneActivate then
     Exit;
+  InstallFailed := True;
   Failed := Rollback(DonePrepare, DoneTrust);
   if Failed = '' then
     Msg := '설치를 마치지 못해 시스템 설정을 원래대로 되돌렸습니다.'
@@ -118,4 +121,12 @@ begin
   SuppressibleMsgBox(Msg + #13#10 +
          '기록: ' + LogPath + #13#10 +
          '설정 → 앱에서 Teecher Agent를 제거한 뒤 다시 설치하세요.', mbError, MB_OK, IDOK);
+end;
+
+function GetCustomSetupExitCode: Integer;
+begin
+  if InstallFailed then
+    Result := 1
+  else
+    Result := 0;
 end;
