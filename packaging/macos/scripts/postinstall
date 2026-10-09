@@ -21,7 +21,7 @@ as_user mkdir -p "$USER_HOME/Library/Logs"
 as_user touch "$LOG"
 
 TOKEN=$(as_user osascript -e 'text returned of (display dialog "관리 콘솔에서 발급한 등록 토큰을 입력하세요.
-이미 등록된 PC를 다시 설치하는 경우에는 비워 두세요." default answer "" with title "Teecher Agent")') || TOKEN=""
+이미 등록된 PC를 다시 설치하는 경우에는 비워 두세요." default answer "" with hidden answer with title "Teecher Agent")') || TOKEN=""
 
 # 프록시 끄기는 늘 먼저 한다(멱등, 우리 프록시만 끈다). 업그레이드에서 이전 설치의 프록시가 켜져 있으면
 # 자동 실행과 CA 파일을 지우지 못하기 때문이다. 그다음 이번 실행에서 끝난 단계만 거꾸로 되돌린다.
@@ -47,7 +47,8 @@ rollback() {
 # 재설치: 실행 중인 에이전트를 내려야 prepare가 새 바이너리로 다시 등록·기동한다(없으면 실패해도 무시)
 launchctl bootout "gui/$USER_ID/kr.teecher.agent" 2>/dev/null || true
 
-as_user "$APP" --home "$USER_HOME" --log-file "$LOG" install --phase prepare --enrollment-token "$TOKEN" || rollback
+# sudo는 명령 인자를 시스템 로그에 남긴다 — 토큰은 표준 입력으로 넘긴다
+printf '%s\n' "$TOKEN" | as_user "$APP" --home "$USER_HOME" --log-file "$LOG" install --phase prepare --enrollment-token-stdin || rollback
 DONE="$DONE prepare"
 "$APP" --home "$USER_HOME" --log-file "$LOG" install --phase trust || rollback
 DONE="$DONE trust"

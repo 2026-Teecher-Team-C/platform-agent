@@ -2,6 +2,7 @@
 
   run                         에이전트 실행 (자동 실행이 부른다)
   install   --phase P         설치 단계 하나. OS 설치 파일이 권한에 맞게 prepare → trust → activate 순서로 부른다
+            [--enrollment-token T | --enrollment-token-stdin]
   uninstall --phase P         제거 단계 하나. activate → trust → prepare 순서
   status                      CA 신뢰, 등록, 자동 실행, 포트, 프록시 상태
   self-test                   설치본에 빠진 모듈이 없는지 확인 (빌드 CI용)
@@ -50,7 +51,10 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("run")
     install = sub.add_parser("install")
     install.add_argument("--phase", type=Phase, choices=list(Phase), required=True)
-    install.add_argument("--enrollment-token", default="")
+    token = install.add_mutually_exclusive_group()
+    token.add_argument("--enrollment-token", default="")
+    # sudo는 명령 인자를 시스템 로그에 남긴다 — macOS 설치 파일은 토큰을 표준 입력 한 줄로 넘긴다
+    token.add_argument("--enrollment-token-stdin", action="store_true")
     uninstall = sub.add_parser("uninstall")
     uninstall.add_argument("--phase", type=Phase, choices=list(Phase), required=True)
     sub.add_parser("status")
@@ -73,7 +77,10 @@ def _log_to(path: Path | None) -> logging.Handler | None:
 def _context(args, dirs, integration) -> InstallContext:
     config = Config.from_env()
     store = make_store(config.credential_store)
-    token = args.enrollment_token if getattr(args, "enrollment_token", "") else config.enrollment_token
+    token = getattr(args, "enrollment_token", "")
+    if getattr(args, "enrollment_token_stdin", False):
+        token = sys.stdin.readline().strip()
+    token = token or config.enrollment_token
 
     def do_enroll() -> None:
         if not token:

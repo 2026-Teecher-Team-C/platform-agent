@@ -1,3 +1,5 @@
+import io
+
 import pytest
 from test_installer import CREDS, FakeIntegration
 
@@ -66,6 +68,36 @@ def test_잘못된_토큰_오류에_토큰_값이_없다(env, capsys):
     assert run("install", "--phase", "prepare", "--enrollment-token", "wrong-token-123") == 1
 
     assert "wrong-token-123" not in capsys.readouterr().err
+
+
+def test_등록_토큰을_표준_입력으로_받는다(env, monkeypatch):
+    # sudo가 명령 인자를 시스템 로그에 남기므로 macOS는 토큰을 인자로 넘기지 않는다
+    run, _, store, enrolled = env
+    monkeypatch.setattr("sys.stdin", io.StringIO("  enroll-ok  \n다음 줄\n"))
+
+    assert run("install", "--phase", "prepare", "--enrollment-token-stdin") == 0
+
+    assert enrolled == ["enroll-ok"]
+    assert store.load() == CREDS
+
+
+def test_표준_입력이_비어_있으면_토큰이_없는_것이다(env, monkeypatch, capsys):
+    run, integration, store, enrolled = env
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
+
+    assert run("install", "--phase", "prepare", "--enrollment-token-stdin") == 1
+
+    assert "등록 토큰이 없다" in capsys.readouterr().err
+    assert enrolled == []
+    assert store.load() is None
+
+
+def test_토큰_인자와_표준_입력은_함께_쓸_수_없다(env):
+    run, _, _, _ = env
+
+    with pytest.raises(SystemExit) as info:
+        run("install", "--phase", "prepare", "--enrollment-token", "x", "--enrollment-token-stdin")
+    assert info.value.code == 2
 
 
 def test_제거하고_status는_실패를_알린다(env):
