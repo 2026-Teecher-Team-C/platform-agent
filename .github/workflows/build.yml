@@ -38,6 +38,16 @@ jobs:
       - name: self-test
         run: |
           if [ "${{ matrix.name }}" = windows ]; then dist/teecher-agent/teecher-agent.exe self-test && test -f dist/teecher-agent/teecher-agentw.exe; else dist/teecher-agent/teecher-agent self-test; fi
+      - name: Inno Setup
+        if: matrix.name == 'windows'
+        run: |
+          choco install innosetup -y --no-progress
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" //DAppVersion=0.1.0 packaging/windows/teecher-agent.iss
+      - uses: actions/upload-artifact@v4
+        if: matrix.name == 'windows'
+        with:
+          name: teecher-agent-setup
+          path: dist/teecher-agent-setup.exe
       - uses: actions/upload-artifact@v4
         with:
           name: teecher-agent-${{ matrix.name }}
