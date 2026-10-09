@@ -53,6 +53,17 @@ def test_환경변수가_파일보다_우선한다(tmp_path):
     assert environ == {"VERDICT_SERVER_ADDRESS": "from-env:9090", "VERDICT_SERVER_TLS": "true"}
 
 
+def test_BOM으로_시작하는_파일도_읽는다(tmp_path):
+    # Windows 메모장은 UTF-8 파일 앞에 BOM을 붙인다 — 첫 키가 알 수 없는 키가 되면 안 된다
+    path = tmp_path / "agent.conf"
+    path.write_bytes("\ufeffVERDICT_SERVER_ADDRESS=from-file:443\n".encode())
+    environ: dict[str, str] = {}
+
+    apply_conf(path, environ)
+
+    assert environ == {"VERDICT_SERVER_ADDRESS": "from-file:443"}
+
+
 def test_파일이_없으면_아무것도_하지_않는다(tmp_path):
     environ: dict[str, str] = {}
 

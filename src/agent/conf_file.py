@@ -51,7 +51,7 @@ def apply_conf(path: Path, environ: MutableMapping[str, str] = os.environ) -> No
     """파일이 없으면 아무것도 하지 않는다(개발 환경). 이미 있는 환경변수는 덮어쓰지 않는다."""
     if not path.is_file():
         return
-    for key, value in parse_conf(path.read_text(encoding="utf-8")).items():
+    for key, value in parse_conf(path.read_text(encoding="utf-8-sig")).items():
         environ.setdefault(key, value)
 
 
