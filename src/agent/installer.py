@@ -11,7 +11,8 @@ InstallError를 낸다. 포트 충돌(PortBusyError)은 첫 단계라 CA·등록
 실패한 단계는 되돌리지 않는다. 앞 단계까지 되돌리는 일은 OS 설치 파일이 uninstall을 불러서 한다.
 제거는 activate → trust → prepare 순서이고, 하나가 실패해도 멈추지 않고 남은 항목을 모은다.
 CA 파일은 신뢰를 푼 다음(prepare 되돌리기)에 지운다 — 신뢰 해제에 쓰는 핑거프린트를 그 파일에서
-계산하기 때문이다.
+계산하기 때문이다. 그래서 CA가 아직 신뢰돼 있으면 CA 파일을, 우리 프록시가 아직 켜져 있으면 자동 실행을
+지우지 않고 남은 항목으로 알린다. 프록시만 켜지고 에이전트가 없으면 모든 웹이 끊긴다.
 """
 
 import logging
@@ -132,6 +133,9 @@ def build_steps(ctx: InstallContext) -> list[Step]:
         ensure_ca(ctx.dirs.ca)
 
     def remove_files() -> None:
+        ca = load_ca(ctx.dirs.ca)
+        if ca is not None and integration.ca_trusted(ca):
+            raise RuntimeError("CA 신뢰를 아직 풀지 못해 CA 파일을 지우지 않는다 — trust를 먼저 되돌린다")
         shutil.rmtree(ctx.dirs.data, ignore_errors=True)
         shutil.rmtree(ctx.dirs.logs, ignore_errors=True)
         if ctx.dirs.data.exists():
@@ -142,6 +146,11 @@ def build_steps(ctx: InstallContext) -> list[Step]:
         integration.install_autostart(ctx.run_command)
         if not ctx.wait_port():
             raise RuntimeError(f"에이전트가 {PROXY_HOST}:{PROXY_PORT} 포트를 열지 않았다")
+
+    def stop_agent() -> None:
+        if integration.proxy_is_ours():
+            raise RuntimeError("시스템 프록시가 아직 켜져 있어 자동 실행을 지우지 않는다 — activate를 먼저 되돌린다")
+        integration.remove_autostart()
 
     def trusted() -> bool:
         ca = load_ca(ctx.dirs.ca)
@@ -170,7 +179,7 @@ def build_steps(ctx: InstallContext) -> list[Step]:
             Phase.PREPARE,
             lambda: integration.autostart_installed() and ctx.port_open(),
             start_agent,
-            integration.remove_autostart,
+            stop_agent,
         ),
         Step(STEP_TRUST, Phase.TRUST, trusted, trust, untrust),
         Step(

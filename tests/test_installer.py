@@ -8,6 +8,7 @@ from agent.credentials import Credentials, MemoryStore
 from agent.installer import (
     INSTALL_ORDER,
     STEP_AUTOSTART,
+    STEP_CA,
     STEP_ENROLL,
     STEP_PORT,
     STEP_PROXY,
@@ -281,6 +282,54 @@ def test_프록시_단계_이름(ctx):
         install_phase(build_steps(context), Phase.ACTIVATE)
 
     assert info.value.step == STEP_PROXY
+
+
+def test_업그레이드에서_새_에이전트가_안_뜨면_프록시가_켜진_동안_자동_실행을_지우지_않는다(ctx):
+    # 이전 설치의 프록시가 켜진 채 자동 실행만 지우면 모든 웹이 끊긴다
+    context, integration, _, state = ctx
+    install_all(context)
+    state["listening"] = False  # 새 바이너리가 죽었다
+    context.wait_port = lambda: False
+    integration.calls.clear()
+
+    with pytest.raises(InstallError) as info:
+        install_phase(build_steps(context), Phase.PREPARE)
+
+    assert info.value.step == STEP_AUTOSTART
+    assert info.value.leftovers == [STEP_AUTOSTART]
+    assert "remove_autostart" not in integration.calls
+    assert integration.autostart is True
+
+    assert uninstall_phase(build_steps(context), Phase.ACTIVATE) == []
+    # 프록시를 끈 뒤에는 지운다. CA는 아직 신뢰돼 있어 남긴다
+    assert uninstall_phase(build_steps(context), Phase.PREPARE) == [STEP_CA]
+    assert integration.autostart is False
+    assert load_ca(context.dirs.ca) is not None
+
+
+def test_프록시를_끄지_못하면_제거해도_자동_실행을_남긴다(ctx):
+    context, integration, _, _ = ctx
+    install_all(context)
+    integration.fail_on = "disable_proxy_if_ours"
+
+    assert uninstall_all(context) == [STEP_PROXY, STEP_AUTOSTART]
+    assert integration.proxy is True
+    assert integration.autostart is True
+    assert "remove_autostart" not in integration.calls
+
+
+def test_CA_신뢰를_풀지_못하면_CA_파일을_남긴다(ctx):
+    # 신뢰 해제에 쓰는 핑거프린트를 CA 파일에서 계산한다 — 먼저 지우면 다시 풀 수 없다
+    context, integration, store, _ = ctx
+    install_all(context)
+    integration.fail_on = "untrust_ca"
+
+    assert uninstall_all(context) == [STEP_TRUST, STEP_CA]
+    ca = load_ca(context.dirs.ca)
+    assert ca is not None
+    assert ca.sha1 in integration.trusted
+    assert store.load() is None
+    assert integration.autostart is False
 
 
 def test_port_open과_wait_port():

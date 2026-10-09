@@ -66,13 +66,14 @@ begin
   Result := Result and (Code = 0);
 end;
 
-{ 이번 실행에서 끝난 단계만 거꾸로 되돌린다. 실패한 단계는 install_phase가 스스로 되돌렸다. 되돌리지 못한 항목 이름을 돌려준다 }
-function Rollback(DonePrepare, DoneTrust, DoneActivate: Boolean): String;
+{ 프록시 끄기는 늘 먼저 한다(멱등, 우리 프록시만 끈다). 업그레이드에서 이전 설치의 프록시가 켜져 있으면
+  자동 실행과 CA 파일을 지우지 못하기 때문이다. 그다음 이번 실행에서 끝난 단계만 거꾸로 되돌린다.
+  실패한 단계는 install_phase가 스스로 되돌렸다. 되돌리지 못한 항목 이름을 돌려준다 }
+function Rollback(DonePrepare, DoneTrust: Boolean): String;
 begin
   Result := '';
-  if DoneActivate then
-    if not RunPhase('uninstall --phase activate', True) then
-      Result := Result + ' activate';
+  if not RunPhase('uninstall --phase activate', True) then
+    Result := Result + ' activate';
   if DoneTrust then
     if not RunPhase('uninstall --phase trust', False) then
       Result := Result + ' trust';
@@ -109,7 +110,7 @@ begin
     DoneActivate := RunPhase('install --phase activate', True);
   if DoneActivate then
     Exit;
-  Failed := Rollback(DonePrepare, DoneTrust, DoneActivate);
+  Failed := Rollback(DonePrepare, DoneTrust);
   if Failed = '' then
     Msg := '설치를 마치지 못해 시스템 설정을 원래대로 되돌렸습니다.'
   else

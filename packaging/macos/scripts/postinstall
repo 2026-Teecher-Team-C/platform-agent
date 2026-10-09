@@ -23,13 +23,13 @@ as_user touch "$LOG"
 TOKEN=$(as_user osascript -e 'text returned of (display dialog "관리 콘솔에서 발급한 등록 토큰을 입력하세요.
 이미 등록된 PC를 다시 설치하는 경우에는 비워 두세요." default answer "" with title "Teecher Agent")') || TOKEN=""
 
-# 이번 실행에서 끝난 단계만 거꾸로 되돌린다. 실패한 단계는 install_phase가 스스로 되돌렸다
+# 프록시 끄기는 늘 먼저 한다(멱등, 우리 프록시만 끈다). 업그레이드에서 이전 설치의 프록시가 켜져 있으면
+# 자동 실행과 CA 파일을 지우지 못하기 때문이다. 그다음 이번 실행에서 끝난 단계만 거꾸로 되돌린다.
+# 실패한 단계는 install_phase가 스스로 되돌렸다
 DONE=""
 rollback() {
   local failed=""
-  case "$DONE" in *activate*)
-    "$APP" --home "$USER_HOME" --log-file "$LOG" uninstall --phase activate || failed="$failed activate" ;;
-  esac
+  "$APP" --home "$USER_HOME" --log-file "$LOG" uninstall --phase activate || failed="$failed activate"
   case "$DONE" in *trust*)
     "$APP" --home "$USER_HOME" --log-file "$LOG" uninstall --phase trust || failed="$failed trust" ;;
   esac
