@@ -69,11 +69,11 @@ OS에 의존하는 코드는 `src/agent/platform/`(linux / macos / windows)에�
 - **macOS 제거:** `sudo` 없이 실행한다. 관리자 암호가 필요한 곳에서 스스로 묻는다. 하나라도 실패하면 앱 폴더를 남기므로 다시 실행할 수 있다
 - **Windows 무인 설치:** `/SUPPRESSMSGBOXES`가 필요하다. 토큰은 설치 파라미터로 넘기므로 Inno 자체 로그는 꺼 두었다. `/LOG`를 주면 로그가 다시 켜져 토큰 파라미터가 기록되니 쓰지 않는다. 단계 기록은 `--log-file`로 `%TEMP%\teecher-install.log`에 남는다
 - **업그레이드:** 실행 중인 에이전트를 먼저 내리고(Windows는 `PrepareToInstall`에서 작업 종료, macOS는 `postinstall`에서 `kr.teecher.agent` bootout) 파일을 덮은 뒤 새 바이너리를 띄운다. 키체인에 자격 증명이 있으면 토큰을 비워 둘 수 있다
-- **실패 시 되돌리기:** 이번 실행에서 끝난 단계만 역순으로 되돌린다. 실패한 단계는 자기 하위 작업을 스스로 되돌린다. 18080 포트를 다른 프로그램이 쓰고 있으면 아무것도 바꾸기 전에 실패한다. 업그레이드가 `trust`·`activate`에서 실패하면 `prepare`도 되돌려 저장된 자격 증명이 지워지므로 새 토큰이 필요하다
+- **실패 시 되돌리기:** 이번 실행에서 끝난 단계만 역순으로 되돌린다. 실패한 단계는 자기 하위 작업을 스스로 되돌린다. 18080 포트를 다른 프로그램이 쓰고 있으면 CA 생성·등록 전에(1회용 토큰을 쓰기 전에) 실패한다. 업그레이드가 `trust`·`activate`에서 실패하면 `prepare`도 되돌려 저장된 자격 증명이 지워지므로 새 토큰이 필요하다
 - 설치 전에 다른 프록시가 켜져 있으면 경고를 로그에 남기고 덮어쓴다
 
 로컬 빌드: `uv run --group build pyinstaller --noconfirm --distpath dist --workpath build packaging/teecher-agent.spec`
-빌드 결과 확인: `dist/teecher-agent/teecher-agent self-test` (`OK self-test (keyring: <backend>)`)
+빌드 결과 확인: `dist/teecher-agent/teecher-agent self-test`(Windows는 `teecher-agent.exe`) (`OK self-test (keyring: <backend>)`)
 
 ## proto 올리기
 

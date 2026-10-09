@@ -33,5 +33,5 @@ uv run --group build pyinstaller --noconfirm --distpath dist --workpath build pa
 
 - `src/agent/platform/` — OS 의존 코드 전부. 다른 모듈은 `sys.platform`을 보지 않는다
 - `proto/` — platform-server submodule. 직접 수정하지 않는다. 계약을 바꾸려면 서버 레포에 PR
-- `src/agent/installer.py` — 설치 단계(prepare → trust → activate)와 되돌리기. OS 작업은 `platform/`의 `*Integration`
+- `src/agent/installer.py` — 설치 단계(prepare[포트 확인 → CA → 등록 → 자동 실행] → trust → activate)와 되돌리기. OS 작업은 `platform/`의 `*Integration`
 - `packaging/` — PyInstaller spec, Inno Setup, macOS pkg 스크립트. 설치 로직을 여기 셸 스크립트에 넣지 않는다
