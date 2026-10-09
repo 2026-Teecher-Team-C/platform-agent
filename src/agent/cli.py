@@ -19,7 +19,7 @@ from pathlib import Path
 from agent.ca import load_ca
 from agent.conf_file import apply_conf, default_conf_path
 from agent.config import Config
-from agent.credentials import make_store, secure_backend_available
+from agent.credentials import make_store, secure_backend_name
 from agent.enroll import enroll
 from agent.installer import (
     InstallContext,
@@ -123,10 +123,11 @@ def _self_test() -> int:
             master.shutdown()
 
     asyncio.run(build())
-    if not secure_backend_available():
+    backend = secure_backend_name()
+    if backend is None:
         print("-- OS 보안 저장소 keyring 백엔드를 찾지 못했다", file=sys.stderr)
         return 1
-    print("OK self-test")
+    print(f"OK self-test (keyring: {backend})")
     return 0
 
 

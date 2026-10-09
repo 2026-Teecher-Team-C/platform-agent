@@ -158,12 +158,18 @@ class KeyringStore:
             raise CredentialStoreError(f"키체인 삭제 실패: {type(exc).__name__}") from exc
 
 
+def secure_backend_name() -> str | None:
+    """실제로 쓸 OS 보안 저장소 백엔드의 클래스 경로. 없으면 None (설치본 자체 점검·CI 로그용)."""
+    try:
+        backend = _secure_backend(keyring.get_keyring())
+    except Exception:
+        return None
+    return None if backend is None else _backend_name(backend)
+
+
 def secure_backend_available() -> bool:
     """설치본 자체 점검용. PyInstaller가 keyring 백엔드 메타데이터를 빠뜨리면 False가 된다."""
-    try:
-        return _secure_backend(keyring.get_keyring()) is not None
-    except Exception:
-        return False
+    return secure_backend_name() is not None
 
 
 def make_store(kind: str) -> CredentialStore:

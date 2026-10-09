@@ -266,3 +266,9 @@ def test_보안_저장소_백엔드가_있는지_알려준다(fake_keyring):
     assert credentials.secure_backend_available()
     fake_keyring.backend = fake_backend(PLAINTEXT)
     assert not credentials.secure_backend_available()
+
+
+def test_보안_저장소_백엔드_이름을_알려준다(fake_keyring):
+    assert credentials.secure_backend_name() in credentials.SECURE_BACKENDS
+    fake_keyring.backend = fake_backend(PLAINTEXT)
+    assert credentials.secure_backend_name() is None
