@@ -24,7 +24,8 @@ def env(monkeypatch, tmp_path):
 
     async def fake_enroll(config, token, s):
         if token != "enroll-ok":
-            raise RuntimeError("invalid enrollment token")
+            # 서버 오류 문구에 토큰이 섞여 와도 가려야 한다
+            raise RuntimeError(f"invalid enrollment token {token!r}")
         enrolled.append(token)
         s.save(CREDS)
         return CREDS
@@ -62,12 +63,18 @@ def test_토큰_없이_처음_설치하면_실패하고_되돌린다(env, capsys
     assert integration.calls == []
 
 
-def test_잘못된_토큰_오류에_토큰_값이_없다(env, capsys):
+def test_잘못된_토큰_오류에_토큰_값이_없다(env, capsys, tmp_path):
     run, _, _, _ = env
+    log = tmp_path / "install.log"
 
-    assert run("install", "--phase", "prepare", "--enrollment-token", "wrong-token-123") == 1
+    assert run("--log-file", str(log), "install", "--phase", "prepare", "--enrollment-token", "wrong-token-123") == 1
 
-    assert "wrong-token-123" not in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "invalid enrollment token" in err
+    assert "wrong-token-123" not in err
+    text = log.read_text(encoding="utf-8")
+    assert "invalid enrollment token" in text
+    assert "wrong-token-123" not in text
 
 
 def test_등록_토큰을_표준_입력으로_받는다(env, monkeypatch):
