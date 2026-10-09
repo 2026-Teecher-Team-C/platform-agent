@@ -66,11 +66,19 @@ begin
   Result := Result and (Code = 0);
 end;
 
-procedure Rollback;
+{ 이번 실행에서 끝난 단계만 거꾸로 되돌린다. 실패한 단계는 install_phase가 스스로 되돌렸다. 되돌리지 못한 항목 이름을 돌려준다 }
+function Rollback(DonePrepare, DoneTrust, DoneActivate: Boolean): String;
 begin
-  RunPhase('uninstall --phase activate', True);
-  RunPhase('uninstall --phase trust', False);
-  RunPhase('uninstall --phase prepare', True);
+  Result := '';
+  if DoneActivate then
+    if not RunPhase('uninstall --phase activate', True) then
+      Result := Result + ' activate';
+  if DoneTrust then
+    if not RunPhase('uninstall --phase trust', False) then
+      Result := Result + ' trust';
+  if DonePrepare then
+    if not RunPhase('uninstall --phase prepare', True) then
+      Result := Result + ' prepare';
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -84,16 +92,29 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  DonePrepare, DoneTrust, DoneActivate: Boolean;
+  Failed, Msg: String;
 begin
   if CurStep <> ssPostInstall then
     Exit;
+  DonePrepare := False;
+  DoneTrust := False;
+  DoneActivate := False;
   { 프록시(HKCU)·작업·키체인은 사용자 것이라 원래 사용자로, CA 신뢰(LocalMachine)는 관리자로 부른다 }
-  if RunPhase('install --phase prepare --enrollment-token "' + TokenPage.Values[0] + '"', True)
-     and RunPhase('install --phase trust', False)
-     and RunPhase('install --phase activate', True) then
+  DonePrepare := RunPhase('install --phase prepare --enrollment-token "' + TokenPage.Values[0] + '"', True);
+  if DonePrepare then
+    DoneTrust := RunPhase('install --phase trust', False);
+  if DoneTrust then
+    DoneActivate := RunPhase('install --phase activate', True);
+  if DoneActivate then
     Exit;
-  Rollback;
-  SuppressibleMsgBox('설치를 마치지 못해 시스템 설정을 원래대로 되돌렸습니다.' + #13#10 +
+  Failed := Rollback(DonePrepare, DoneTrust, DoneActivate);
+  if Failed = '' then
+    Msg := '설치를 마치지 못해 시스템 설정을 원래대로 되돌렸습니다.'
+  else
+    Msg := '설치를 마치지 못했고 일부는 되돌리지 못했습니다. 되돌리지 못한 항목:' + Failed;
+  SuppressibleMsgBox(Msg + #13#10 +
          '기록: ' + LogPath + #13#10 +
          '설정 → 앱에서 Teecher Agent를 제거한 뒤 다시 설치하세요.', mbError, MB_OK, IDOK);
 end;

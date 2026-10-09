@@ -4,11 +4,17 @@
 set -u
 APP="/Applications/Teecher Agent/teecher-agent"
 USER_NAME=$(stat -f%Su /dev/console)
+case "$USER_NAME" in
+  ""|root|loginwindow|_mbsetupuser)
+    echo "로그인한 사용자가 없어 설치할 수 없습니다. 사용자로 로그인한 뒤 다시 설치하세요." >&2
+    exit 1 ;;
+esac
 USER_ID=$(id -u "$USER_NAME")
-USER_HOME=$(dscl . -read "/Users/$USER_NAME" NFSHomeDirectory | awk '{print $2}')
+# 한 줄/두 줄 출력과 공백이 든 경로를 모두 처리한다
+USER_HOME=$(dscl . -read "/Users/$USER_NAME" NFSHomeDirectory | sed -e "/^NFSHomeDirectory:$/d" -e "s/^NFSHomeDirectory: *//" | head -1 | sed 's/^ *//')
 LOG="$USER_HOME/Library/Logs/teecher-install.log"
 
-as_user() { launchctl asuser "$USER_ID" sudo -u "$USER_NAME" "$@"; }
+as_user() { launchctl asuser "$USER_ID" sudo -H -u "$USER_NAME" "$@"; }
 
 # root가 먼저 만들면 사용자 단계가 쓰지 못한다
 as_user mkdir -p "$USER_HOME/Library/Logs"
@@ -17,18 +23,34 @@ as_user touch "$LOG"
 TOKEN=$(as_user osascript -e 'text returned of (display dialog "관리 콘솔에서 발급한 등록 토큰을 입력하세요.
 이미 등록된 PC를 다시 설치하는 경우에는 비워 두세요." default answer "" with title "Teecher Agent")') || TOKEN=""
 
+# 이번 실행에서 끝난 단계만 거꾸로 되돌린다. 실패한 단계는 install_phase가 스스로 되돌렸다
+DONE=""
 rollback() {
-  "$APP" --home "$USER_HOME" --log-file "$LOG" uninstall --phase activate
-  "$APP" --home "$USER_HOME" --log-file "$LOG" uninstall --phase trust
-  as_user "$APP" --log-file "$LOG" uninstall --phase prepare
-  as_user osascript -e "display alert \"Teecher Agent 설치 실패\" message \"시스템 설정을 원래대로 되돌렸습니다. 기록: $LOG\" as critical"
+  local failed=""
+  case "$DONE" in *activate*)
+    "$APP" --home "$USER_HOME" --log-file "$LOG" uninstall --phase activate || failed="$failed activate" ;;
+  esac
+  case "$DONE" in *trust*)
+    "$APP" --home "$USER_HOME" --log-file "$LOG" uninstall --phase trust || failed="$failed trust" ;;
+  esac
+  case "$DONE" in *prepare*)
+    as_user "$APP" --home "$USER_HOME" --log-file "$LOG" uninstall --phase prepare || failed="$failed prepare" ;;
+  esac
+  if [ -z "$failed" ]; then
+    as_user osascript -e "display alert \"Teecher Agent 설치 실패\" message \"시스템 설정을 원래대로 되돌렸습니다. 기록: $LOG\" as critical"
+  else
+    as_user osascript -e "display alert \"Teecher Agent 설치 실패\" message \"되돌리지 못한 항목:$failed. 기록: $LOG\" as critical"
+  fi
   exit 1
 }
 
 # 재설치: 실행 중인 에이전트를 내려야 prepare가 새 바이너리로 다시 등록·기동한다(없으면 실패해도 무시)
 launchctl bootout "gui/$USER_ID/kr.teecher.agent" 2>/dev/null || true
 
-as_user "$APP" --log-file "$LOG" install --phase prepare --enrollment-token "$TOKEN" || rollback
+as_user "$APP" --home "$USER_HOME" --log-file "$LOG" install --phase prepare --enrollment-token "$TOKEN" || rollback
+DONE="$DONE prepare"
 "$APP" --home "$USER_HOME" --log-file "$LOG" install --phase trust || rollback
+DONE="$DONE trust"
 "$APP" --home "$USER_HOME" --log-file "$LOG" install --phase activate || rollback
+DONE="$DONE activate"
 exit 0

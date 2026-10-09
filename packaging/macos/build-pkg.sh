@@ -8,8 +8,10 @@ APP="$STAGE/Applications/Teecher Agent"
 
 rm -rf "$STAGE"
 mkdir -p "$APP"
+export COPYFILE_DISABLE=1
 cp -R dist/teecher-agent/. "$APP/"
 cp packaging/agent.conf packaging/macos/uninstall.sh "$APP/"
+xattr -cr "$STAGE"
 chmod 755 "$APP/uninstall.sh" packaging/macos/scripts/postinstall
 pkgbuild --root "$STAGE" --scripts packaging/macos/scripts \
   --identifier kr.teecher.agent --version "$VERSION" --install-location / \
