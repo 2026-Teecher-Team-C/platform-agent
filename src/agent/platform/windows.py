@@ -1,10 +1,32 @@
 import ctypes
+import subprocess
 from pathlib import Path
 
 from agent.platform import base
 from agent.platform.base import SpoolFile, create_spool_dir
 
-__all__ = ["create_spool_file", "prepare_spool_dir"]
+__all__ = ["create_spool_file", "hardware_uuid", "prepare_spool_dir"]
+
+
+def hardware_uuid() -> str:
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "(Get-CimInstance Win32_ComputerSystemProduct).UUID",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+    except Exception:
+        return ""
+    return result.stdout.strip()
+
 
 # Windows Search가 내용을 색인하지 않는다. 디렉터리에 걸면 새로 만드는 파일이 상속한다.
 FILE_ATTRIBUTE_NOT_CONTENT_INDEXED = 0x2000

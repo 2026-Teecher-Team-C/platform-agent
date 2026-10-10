@@ -13,12 +13,19 @@ import uuid
 from dataclasses import dataclass
 
 from google.protobuf.timestamp_pb2 import Timestamp
-from mitmproxy import ctx, exceptions, http
+from grpc import aio as grpc_aio
+from mitmproxy import ctx, exceptions, http, tls
 
+from agent.agent_client import AgentClient
 from agent.config import Config
+from agent.credentials import make_store
 from agent.detection import filename_of, is_download
 from agent.held_body import HeldBody, held_body_of
-from agent.verdict_client import VerdictClient
+from agent.identity import current_identity
+from agent.lifecycle import AgentLifecycle
+from agent.policy import EMPTY_POLICY, Policy, normalize_host
+from agent.verdict_client import VerdictClient, open_channel
+from teecher.agent.v1 import agent_pb2
 from teecher.verdict.v1 import verdict_pb2
 
 logger = logging.getLogger(__name__)
@@ -28,6 +35,10 @@ PASSTHROUGH_KEY = "agent.passthrough"
 # Config 파싱 전에 먼저 거는 안전한 기본값. 파싱에 성공하면 config.body_size_limit으로 바꾼다.
 SAFE_BODY_SIZE_LIMIT = "500m"
 ENCODED_DOWNLOAD_REASON = "encoded download unsupported"
+BYPASS_REASONS = {
+    agent_pb2.BYPASS_CATEGORY_PINNED: "pinned host bypass",
+    agent_pb2.BYPASS_CATEGORY_SECURITY_UPDATE: "security update bypass",
+}
 
 
 @dataclass
@@ -100,10 +111,28 @@ def _timestamp(seconds: float) -> Timestamp:
     return ts
 
 
+def _content_length(headers) -> int:
+    try:
+        return max(int(headers.get("content-length", "0")), 0)
+    except ValueError:
+        return 0
+
+
+def _connect_host(flow: http.HTTPFlow) -> str:
+    # 일반 모드에서 mitmproxy는 request.host로 연결한다(평문 HTTP는 Host 헤더에서 나온다). 그래서 호스트만으로는
+    # 아무것도 인증되지 않고, 바이패스는 HTTPS이고 업스트림 인증서가 이 호스트와 같은 SNI로 검증됐을 때만 믿는다.
+    # request.host 일치 검사는 이중 방어다.
+    address = flow.server_conn.address if flow.server_conn else None
+    return address[0] if address else ""
+
+
 class HoldPipeline:
     def __init__(self) -> None:
         self.config: Config | None = None
         self.client: VerdictClient | None = None
+        self.lifecycle: AgentLifecycle | None = None
+        self._channel: grpc_aio.Channel | None = None
+        self._lifecycle_task: asyncio.Task | None = None
         self._started = False
         self._report_tasks: set[asyncio.Task] = set()
 
@@ -118,7 +147,16 @@ class HoldPipeline:
         self.config = Config.from_env()
         ctx.options.update(body_size_limit=self.config.body_size_limit)
         # grpc.aio 채널은 실행 중인 루프에 묶인다 — running() 안에서 만든다.
-        self.client = VerdictClient(self.config)
+        self._channel = open_channel(self.config)
+        self.lifecycle = AgentLifecycle(
+            self.config,
+            AgentClient(self._channel, self.config.rpc_timeout_seconds),
+            make_store(self.config.credential_store),
+            current_identity(),
+        )
+        self.client = VerdictClient(self.config, self._channel, token=self.lifecycle.token)
+        # 등록·정책 수신은 기동을 막지 않는다. 끝나기 전의 다운로드는 토큰 없음(fail-close)·바이패스 없음이다.
+        self._lifecycle_task = asyncio.create_task(self.lifecycle.start())
         self._started = True
         logger.info(
             "보류 파이프라인 시작: server=%s body_size_limit=%s hold_timeout=%ss",
@@ -137,9 +175,21 @@ class HoldPipeline:
             raise exceptions.OptionsError("body_size_limit을 해제할 수 없다")
 
     async def done(self) -> None:
+        if self._lifecycle_task is not None:
+            self._lifecycle_task.cancel()
+            await asyncio.gather(self._lifecycle_task, return_exceptions=True)
+        if self.lifecycle is not None:
+            await self.lifecycle.stop()
         await self.drain_reports()
         if self.client is not None:
             await self.client.close()
+        if self._channel is not None:
+            await self._channel.close()
+
+    async def wait_started(self) -> None:
+        """AgentLifecycle.start()가 끝날 때까지 기다린다. 테스트에서 쓴다."""
+        if self._lifecycle_task is not None:
+            await self._lifecycle_task
 
     async def drain_reports(self) -> None:
         """진행 중인 ReportEvent를 기다린다. 종료 시와 테스트에서 쓴다."""
@@ -150,7 +200,64 @@ class HoldPipeline:
         # 요청 본문은 보지 않는다. 버퍼링하면 업로드가 메모리에 쌓이고 body_size_limit에 걸려 413이 난다.
         flow.request.stream = True
 
+    def _policy(self) -> Policy:
+        return self.lifecycle.policy if self.lifecycle is not None else EMPTY_POLICY
+
+    def tls_clienthello(self, data: tls.ClientHelloData) -> None:
+        # 인증서를 고정한 앱은 가로채면 연결이 깨진다 — TLS를 풀지 않고 그대로 흘려보낸다.
+        # 호스트는 CONNECT 대상(실제 연결할 곳)만 본다. SNI는 클라이언트가 임의로 적을 수 있다.
+        try:
+            address = data.context.server.address
+            host = address[0] if address else ""
+            if host and self._policy().bypass_category(host) == agent_pb2.BYPASS_CATEGORY_PINNED:
+                data.ignore_connection = True
+                logger.info("PINNED 바이패스: %s", host)
+        except Exception:
+            # 판단에 실패하면 가로챈다(검사하는 쪽).
+            logger.exception("PINNED 바이패스 판단 실패")
+
+    def _bypass_category(self, flow: http.HTTPFlow) -> int | None:
+        policy = self._policy()
+        server_conn = flow.server_conn
+        # 평문 HTTP이거나 인증서 검증 없는 연결이면 호스트 이름이 아무것도 증명하지 못한다.
+        if flow.request.scheme != "https" or not server_conn or not server_conn.tls:
+            return None
+        if normalize_host(server_conn.sni or "") != normalize_host(_connect_host(flow)):
+            return None
+        category = policy.bypass_category(_connect_host(flow))
+        # 연결 대상과 요청 호스트가 둘 다 같은 바이패스 호스트일 때만 인정한다.
+        if category is None or policy.bypass_category(flow.request.host) != category:
+            return None
+        return category
+
+    def _bypass(self, flow: http.HTTPFlow, category: int) -> None:
+        flow.metadata[PASSTHROUGH_KEY] = True
+        flow.response.stream = True
+        try:
+            if not is_download(flow.request.headers, flow.response.headers).is_download:
+                return
+            hold = _snapshot(flow)
+            hold.file_size = _content_length(flow.response.headers)
+            self._schedule_report(
+                hold,
+                Outcome(
+                    verdict_pb2.FINAL_DECISION_BYPASSED,
+                    verdict_pb2.DECISION_SOURCE_POLICY,
+                    BYPASS_REASONS[category],
+                ),
+            )
+        except Exception:
+            logger.exception("바이패스 이벤트 보고 준비 실패: %s", flow.request.pretty_url)
+
     def responseheaders(self, flow: http.HTTPFlow) -> None:
+        try:
+            category = self._bypass_category(flow)
+        except Exception:
+            logger.exception("바이패스 판단 실패 — 바이패스하지 않는다: %s", flow.request.pretty_url)
+            category = None
+        if category is not None:
+            self._bypass(flow, category)
+            return
         # 헤더가 나간 뒤에는 차단할 수 없으므로, 판별이 실패하면 다운로드로 간주해 붙잡는다.
         try:
             if not is_download(flow.request.headers, flow.response.headers).is_download:

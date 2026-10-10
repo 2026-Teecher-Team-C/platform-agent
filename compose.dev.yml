@@ -22,6 +22,10 @@ services:
     environment:
       # 기본값은 platform-server의 make dev 스택 (nginx)
       VERDICT_SERVER_ADDRESS: ${VERDICT_SERVER_ADDRESS:-host.docker.internal:80}
+      # 컨테이너에는 OS 키체인이 없다 — 자격 증명은 메모리에만 (재시작하면 다시 등록)
+      CREDENTIAL_STORE: memory
+      ENROLLMENT_TOKEN: ${ENROLLMENT_TOKEN:-}
+      AGENT_TOKEN: ${AGENT_TOKEN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # LAN에 열린 프록시가 되지 않도록 호스트 루프백에만 publish한다
