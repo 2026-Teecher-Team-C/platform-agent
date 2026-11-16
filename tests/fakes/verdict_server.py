@@ -43,6 +43,7 @@ class FakeVerdictServicer(verdict_pb2_grpc.VerdictServiceServicer):
         self.report_events: list[verdict_pb2.ReportEventRequest] = []
         self.last_metadata: dict[str, str] = {}
         self.last_submit_body: bytes = b""
+        self.check_hash_requests: list[verdict_pb2.CheckHashRequest] = []
         self.force_check_hash_decision: int | None = None
         self.force_check_hash_source: int = verdict_pb2.DECISION_SOURCE_UNSPECIFIED
         self.force_submit_file_decision: int | None = None
@@ -50,6 +51,7 @@ class FakeVerdictServicer(verdict_pb2_grpc.VerdictServiceServicer):
 
     async def CheckHash(self, request, context):
         self.last_metadata = _metadata_dict(context)
+        self.check_hash_requests.append(request)
         if self.delay_seconds:
             await asyncio.sleep(self.delay_seconds)
         if self.force_check_hash_decision is not None:

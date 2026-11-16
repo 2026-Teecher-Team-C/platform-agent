@@ -8,6 +8,7 @@ dependencies = [
     "grpcio>=1.75",
     "protobuf>=6.32",
     "keyring>=25",
+    "py-tlsh>=5.0.0",
 ]
 
 [dependency-groups]

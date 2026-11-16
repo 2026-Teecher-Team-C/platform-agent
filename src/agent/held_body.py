@@ -10,7 +10,12 @@ import hashlib
 from collections.abc import AsyncIterator
 from typing import Protocol
 
+import tlsh as py_tlsh
 from mitmproxy import http
+
+# 서버 계산기(TLSH Java 포트, force 모드)의 최소 길이. 이보다 짧으면 TLSH가 없다.
+TLSH_MIN_BYTES = 50
+TLSH_UPDATE_BYTES = 256 * 1024
 
 
 class HeldBody(Protocol):
@@ -18,6 +23,8 @@ class HeldBody(Protocol):
     def size(self) -> int: ...
 
     async def sha256(self) -> str: ...
+
+    async def tlsh(self) -> str | None: ...
 
     def chunks(self, chunk_size: int) -> AsyncIterator[bytes]: ...
 
@@ -32,6 +39,32 @@ class MemoryBody:
 
     async def sha256(self) -> str:
         return (await asyncio.to_thread(hashlib.sha256, self._data)).hexdigest()
+
+    async def tlsh(self) -> str | None:
+        """서버 형식(`T1` + 대문자 16진 70자)의 TLSH. 계산할 수 없으면 None.
+
+        SHA-256처럼 바이트 수준 퍼지 해시일 뿐 파일 형식을 파싱하지 않는다.
+        CPU 작업이므로 이벤트 루프 밖에서 돌린다.
+        """
+        return await asyncio.to_thread(self._compute_tlsh)
+
+    def _compute_tlsh(self) -> str | None:
+        if len(self._data) < TLSH_MIN_BYTES:
+            return None
+        # py-tlsh는 GIL을 쥔 채 계산한다. 한 번에 hash()하면 500MB에 약 6초 동안 스레드로 빼도 이벤트 루프가
+        # 멈춘다. 조각으로 나눠 update()하면 호출 사이에 GIL이 풀려 다른 flow가 계속 돈다(결과는 같다).
+        hasher = py_tlsh.Tlsh()
+        for offset in range(0, len(self._data), TLSH_UPDATE_BYTES):
+            hasher.update(self._data[offset : offset + TLSH_UPDATE_BYTES])
+        try:
+            hasher.final()
+            digest = hasher.hexdigest()
+        except ValueError:
+            # 내용이 단조로워 분산이 부족하다(서버의 TNULL과 같다) — TLSH 없음.
+            return None
+        if not digest or digest == "TNULL":
+            return None
+        return digest
 
     async def chunks(self, chunk_size: int) -> AsyncIterator[bytes]:
         for offset in range(0, len(self._data), chunk_size):

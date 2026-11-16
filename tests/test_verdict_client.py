@@ -11,6 +11,8 @@ from agent.held_body import MemoryBody
 from agent.verdict_client import CHUNK_SIZE, ReportFailed, VerdictClient, VerdictUnavailable, open_channel
 from teecher.verdict.v1 import verdict_pb2, verdict_pb2_grpc
 
+EVENT_ID = "3f2b8c1e-5a47-4d0a-9c6e-1b2d3e4f5a6b"
+
 
 def unused_port() -> int:
     with socket.socket() as s:
@@ -45,7 +47,7 @@ async def test_EICAR_해시는_업로드_없이_BLOCK_BLACKLIST를_반환한다(
     port, _ = fake_server
     client = client_factory(Config(verdict_server_address=f"127.0.0.1:{port}"))
 
-    response = await client.check_hash(EICAR_SHA256, len(EICAR_BODY))
+    response = await client.check_hash(EICAR_SHA256, len(EICAR_BODY), None, EVENT_ID)
 
     assert response.decision == verdict_pb2.DECISION_BLOCK
     assert response.source == verdict_pb2.DECISION_SOURCE_BLACKLIST
@@ -55,7 +57,7 @@ async def test_미확인_해시는_UNKNOWN이고_이후_submit_file로_판정한
     port, _ = fake_server
     client = client_factory(Config(verdict_server_address=f"127.0.0.1:{port}"))
 
-    check = await client.check_hash("0" * 64, 11)
+    check = await client.check_hash("0" * 64, 11, None, EVENT_ID)
     assert check.decision == verdict_pb2.DECISION_UNKNOWN
 
     clean = await client.submit_file(
@@ -104,7 +106,7 @@ async def test_서버가_없으면_VerdictUnavailable(client_factory):
     client = client_factory(Config(verdict_server_address=f"127.0.0.1:{unused_port()}", rpc_timeout_seconds=3))
 
     with pytest.raises(VerdictUnavailable):
-        await client.check_hash("0" * 64, 10)
+        await client.check_hash("0" * 64, 10, None, EVENT_ID)
 
 
 async def test_CheckHash_지연이_타임아웃보다_길면_VerdictUnavailable(fake_server, client_factory):
@@ -113,7 +115,7 @@ async def test_CheckHash_지연이_타임아웃보다_길면_VerdictUnavailable(
     client = client_factory(Config(verdict_server_address=f"127.0.0.1:{port}", rpc_timeout_seconds=0.2))
 
     with pytest.raises(VerdictUnavailable):
-        await client.check_hash("0" * 64, 10)
+        await client.check_hash("0" * 64, 10, None, EVENT_ID)
 
 
 async def test_SubmitFile_지연이_타임아웃보다_길면_VerdictUnavailable(fake_server, client_factory):
@@ -137,7 +139,7 @@ async def test_토큰이_있으면_Bearer_메타데이터로_전달된다(fake_s
     port, servicer = fake_server
     client = client_factory(Config(verdict_server_address=f"127.0.0.1:{port}", agent_token="tok123"))
 
-    await client.check_hash("0" * 64, 10)
+    await client.check_hash("0" * 64, 10, None, EVENT_ID)
 
     assert servicer.last_metadata.get("authorization") == "Bearer tok123"
 
@@ -146,7 +148,7 @@ async def test_토큰이_비어있으면_authorization_헤더가_없다(fake_ser
     port, servicer = fake_server
     client = client_factory(Config(verdict_server_address=f"127.0.0.1:{port}", agent_token=""))
 
-    await client.check_hash("0" * 64, 10)
+    await client.check_hash("0" * 64, 10, None, EVENT_ID)
 
     assert "authorization" not in servicer.last_metadata
 
@@ -156,7 +158,7 @@ async def test_토큰에_개행이_있으면_VerdictUnavailable(fake_server, cli
     client = client_factory(Config(verdict_server_address=f"127.0.0.1:{port}", agent_token="bad\ntoken"))
 
     with pytest.raises(VerdictUnavailable):
-        await client.check_hash("0" * 64, 10)
+        await client.check_hash("0" * 64, 10, None, EVENT_ID)
 
 
 async def test_close_이후_호출하면_VerdictUnavailable(fake_server, client_factory):
@@ -165,7 +167,7 @@ async def test_close_이후_호출하면_VerdictUnavailable(fake_server, client_
     await client.close()
 
     with pytest.raises(VerdictUnavailable):
-        await client.check_hash("0" * 64, 10)
+        await client.check_hash("0" * 64, 10, None, EVENT_ID)
 
 
 async def test_CheckHash가_UNSPECIFIED를_반환하면_VerdictUnavailable(fake_server, client_factory):
@@ -174,7 +176,7 @@ async def test_CheckHash가_UNSPECIFIED를_반환하면_VerdictUnavailable(fake_
     client = client_factory(Config(verdict_server_address=f"127.0.0.1:{port}"))
 
     with pytest.raises(VerdictUnavailable):
-        await client.check_hash("0" * 64, 10)
+        await client.check_hash("0" * 64, 10, None, EVENT_ID)
 
 
 async def test_CheckHash가_정의되지_않은_enum_값을_반환하면_VerdictUnavailable(fake_server, client_factory):
@@ -184,7 +186,7 @@ async def test_CheckHash가_정의되지_않은_enum_값을_반환하면_Verdict
     client = client_factory(Config(verdict_server_address=f"127.0.0.1:{port}"))
 
     with pytest.raises(VerdictUnavailable):
-        await client.check_hash("0" * 64, 10)
+        await client.check_hash("0" * 64, 10, None, EVENT_ID)
 
 
 async def test_SubmitFile이_UNKNOWN을_반환하면_VerdictUnavailable(fake_server, client_factory):
@@ -333,10 +335,10 @@ async def test_토큰_콜러블은_호출할_때마다_다시_읽는다(fake_ser
     current = ["tok-a"]
     client = VerdictClient(Config(verdict_server_address=f"127.0.0.1:{port}"), token=lambda: current[0])
 
-    await client.check_hash("0" * 64, 10)
+    await client.check_hash("0" * 64, 10, None, EVENT_ID)
     assert servicer.last_metadata.get("authorization") == "Bearer tok-a"
     current[0] = "tok-b"
-    await client.check_hash("0" * 64, 10)
+    await client.check_hash("0" * 64, 10, None, EVENT_ID)
 
     assert servicer.last_metadata.get("authorization") == "Bearer tok-b"
     await client.close()
@@ -349,6 +351,21 @@ async def test_주입된_채널은_close가_닫지_않는다(fake_server):
     client = VerdictClient(config, channel)
 
     await client.close()
-    await VerdictClient(config, channel).check_hash("0" * 64, 10)  # 아직 쓸 수 있다
+    await VerdictClient(config, channel).check_hash("0" * 64, 10, None, EVENT_ID)  # 아직 쓸 수 있다
 
     await channel.close()
+
+
+async def test_check_hash는_tlsh와_event_id를_요청에_담는다(fake_server, client_factory):
+    port, servicer = fake_server
+    client = client_factory(Config(verdict_server_address=f"127.0.0.1:{port}"))
+    tlsh = "T1" + "A" * 70
+
+    await client.check_hash("0" * 64, 10, tlsh, EVENT_ID)
+    await client.check_hash("1" * 64, 10, None, EVENT_ID)
+
+    with_tlsh, without_tlsh = servicer.check_hash_requests
+    assert with_tlsh.tlsh == tlsh
+    assert with_tlsh.event_id == EVENT_ID
+    assert without_tlsh.tlsh == ""
+    assert without_tlsh.event_id == EVENT_ID
