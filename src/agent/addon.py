@@ -327,6 +327,14 @@ class HoldPipeline:
         except Exception:
             logger.exception("오류 flow 보고 실패: %s", flow.request.pretty_url)
 
+    async def _tlsh_or_none(self, body: HeldBody, hold: Hold) -> str | None:
+        # TLSH는 보조 신호다. 계산이 실패해도 업로드·YARA가 남아 있으므로 차단하지 않고 계속한다.
+        try:
+            return await body.tlsh()
+        except Exception:
+            logger.warning("TLSH 계산 실패 — TLSH 없이 CheckHash (event=%s)", hold.event_id, exc_info=True)
+            return None
+
     async def _decide(self, body: HeldBody, hold: Hold) -> Outcome:
         assert self.client is not None and self.config is not None  # response()에서 확인했다
         deadline = time.monotonic() + self.config.hold_timeout_seconds
@@ -339,9 +347,10 @@ class HoldPipeline:
             )
 
         hold.file_size = body.size
-        hold.sha256 = await body.sha256()
+        # SHA-256과 TLSH는 같이 계산한다. 둘 다 호출자의 wait_for(보류 시간) 안에서 돈다.
+        hold.sha256, tlsh = await asyncio.gather(body.sha256(), self._tlsh_or_none(body, hold))
 
-        check = await self.client.check_hash(hold.sha256, hold.file_size)
+        check = await self.client.check_hash(hold.sha256, hold.file_size, tlsh, hold.event_id)
         if check.decision == verdict_pb2.DECISION_ALLOW:
             return Outcome(verdict_pb2.FINAL_DECISION_RELEASED, check.source, check.reason, cache_hit=True)
         if check.decision == verdict_pb2.DECISION_BLOCK:

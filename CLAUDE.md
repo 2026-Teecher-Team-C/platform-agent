@@ -17,6 +17,7 @@ uv run mitmdump -s src/addon_entry.py        # 호스트에서 직접. 코드를
 
 - **파일 내용을 파싱하지 않는다.** PE 헤더·엔트로피·압축 해제·YARA는 전부 검사 서버 몫이다. 에이전트는
   응답 헤더(`Content-Disposition`, MIME, 크기, `Sec-Fetch-Mode`)만 보고, 본문은 해시하고 스풀할 뿐이다
+  (TLSH도 형식을 파싱하지 않는 바이트 수준 퍼지 해시다. 256KB 조각 `update()`로 이벤트 루프 밖에서 계산하고, 실패하면 `tlsh`를 생략한다)
 - **fail-close 고정.** 검사 서버에 닿지 못하면 차단한다. fail-open, 재시도·서킷 브레이커·로컬 캐시 폴백을
   만들지 않는다
 - **영속 저장소를 두지 않는다.** 판정 캐시(SQLite)도 스풀 상태 DB도 없다. 스풀 상태는 메모리에만. 예외는 하나 — `agent_token`(자격 증명)은 OS 키체인에 둔다(`src/agent/credentials.py`, 2026-09-29 결정). 평문 파일 금지

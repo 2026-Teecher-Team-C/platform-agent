@@ -1,7 +1,10 @@
 import asyncio
 import gzip
 import hashlib
+import os
+import re
 import socket
+import uuid
 
 import mitmproxy.net.encoding
 import pytest
@@ -13,6 +16,7 @@ from mitmproxy.test import taddons, tflow, tutils
 
 from agent import addon as addon_module
 from agent.addon import ENCODED_DOWNLOAD_REASON, HOLD_KEY, PASSTHROUGH_KEY, HoldPipeline
+from agent.held_body import MemoryBody
 from agent.verdict_client import ReportFailed, VerdictUnavailable
 from teecher.verdict.v1 import verdict_pb2
 
@@ -490,3 +494,54 @@ async def test_자격_증명이_없으면_다운로드는_fail_close로_막힌�
 
     assert pipeline.lifecycle.token() == ""
     assert flow.response.status_code == 403
+
+
+async def test_similarity_block_from_checkhash_blocks_without_upload(fake_server, pipeline_factory):
+    port, servicer = fake_server
+    servicer.force_check_hash_decision = verdict_pb2.DECISION_BLOCK
+    servicer.force_check_hash_source = verdict_pb2.DECISION_SOURCE_SIMILARITY
+    pipeline = pipeline_factory(port)
+    flow = make_flow(os.urandom(4096))
+
+    await run_flow(pipeline, flow)
+    await pipeline.drain_reports()
+
+    assert flow.response.status_code == 403
+    assert servicer.last_submit_body == b""
+    [event] = servicer.report_events
+    assert event.decision == verdict_pb2.FINAL_DECISION_BLOCKED
+    assert event.decision_source == verdict_pb2.DECISION_SOURCE_SIMILARITY
+
+
+async def test_checkhash에_tlsh와_정규형_event_id가_실린다(fake_server, pipeline_factory):
+    port, servicer = fake_server
+    pipeline = pipeline_factory(port)
+    body = os.urandom(4096)
+    flow = make_flow(body)
+
+    await run_flow(pipeline, flow)
+
+    [request] = servicer.check_hash_requests
+    assert re.fullmatch(r"T1[0-9A-F]{70}", request.tlsh)
+    assert request.event_id == flow.metadata[HOLD_KEY].event_id
+    # 서버는 소문자 하이픈 UUID만 받는다
+    assert request.event_id == str(uuid.UUID(request.event_id))
+
+
+async def test_tlsh_failure_does_not_block(fake_server, pipeline_factory, monkeypatch):
+    port, servicer = fake_server
+    pipeline = pipeline_factory(port)
+
+    def boom(self):
+        raise RuntimeError("tlsh boom")
+
+    monkeypatch.setattr(MemoryBody, "_compute_tlsh", boom)
+    flow = make_flow(CLEAN_BODY)
+
+    await run_flow(pipeline, flow)
+    await pipeline.drain_reports()
+
+    assert flow.response.status_code == 200
+    [request] = servicer.check_hash_requests
+    assert request.tlsh == ""
+    assert servicer.last_submit_body == CLEAN_BODY

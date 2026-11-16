@@ -583,6 +583,7 @@ dependencies = [
     { name = "keyring" },
     { name = "mitmproxy" },
     { name = "protobuf" },
+    { name = "py-tlsh" },
 ]
 
 [package.dev-dependencies]
@@ -599,6 +600,7 @@ requires-dist = [
     { name = "keyring", specifier = ">=25" },
     { name = "mitmproxy", specifier = ">=12" },
     { name = "protobuf", specifier = ">=6.32" },
+    { name = "py-tlsh", specifier = ">=5.0.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -641,6 +643,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/5a/04/1759906c4c5b67b29
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9d/16/053c2945c5e3aebeefb4ccd5c5e7639e38bc30ad1bdc7ce86c6d01707726/publicsuffix2-2.20191221-py2.py3-none-any.whl", hash = "sha256:786b5e36205b88758bd3518725ec8cfe7a8173f5269354641f581c6b80a99893", size = 89033, upload-time = "2019-12-21T11:30:41.744Z" },
 ]
+
+[[package]]
+name = "py-tlsh"
+version = "5.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d4/fb/a1aceafcf0c5196f1cb558319dca5231190f248f27fbec2e4033276db77f/py_tlsh-5.0.0.tar.gz", hash = "sha256:a21cb75eb49e9d9237c8c39d2fb310a5c976b3abc6c35c2e405e16c089abad1b", size = 49020, upload-time = "2026-05-08T04:31:47.377Z" }
 
 [[package]]
 name = "pyasn1"

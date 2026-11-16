@@ -65,8 +65,11 @@ class VerdictClient:
             return None
         return [("authorization", f"Bearer {token}")]
 
-    async def check_hash(self, sha256: str, file_size: int) -> verdict_pb2.CheckHashResponse:
-        request = verdict_pb2.CheckHashRequest(sha256=sha256, file_size=file_size)
+    async def check_hash(
+        self, sha256: str, file_size: int, tlsh: str | None, event_id: str
+    ) -> verdict_pb2.CheckHashResponse:
+        # tlsh가 없으면 빈 문자열(proto3 기본값) — 서버는 TLSH 단계를 건너뛴다.
+        request = verdict_pb2.CheckHashRequest(sha256=sha256, file_size=file_size, tlsh=tlsh or "", event_id=event_id)
         try:
             response = await self._stub.CheckHash(
                 request, timeout=self._config.rpc_timeout_seconds, metadata=self._metadata()
