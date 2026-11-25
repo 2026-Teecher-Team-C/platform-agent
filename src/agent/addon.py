@@ -16,6 +16,7 @@ from google.protobuf.timestamp_pb2 import Timestamp
 from grpc import aio as grpc_aio
 from mitmproxy import ctx, exceptions, http, tls
 
+from agent import block_page
 from agent.agent_client import AgentClient
 from agent.config import Config
 from agent.credentials import make_store
@@ -66,9 +67,17 @@ class Outcome:
     reason: str = ""
     cache_hit: bool = False
     bytes_uploaded: int = 0
+    evidence: verdict_pb2.VerdictEvidence | None = None  # 차단 판정 근거. 구버전 서버면 None
 
 
 FAIL_CLOSE = Outcome(verdict_pb2.FINAL_DECISION_FAIL_CLOSE)
+
+
+def _evidence_of(response) -> verdict_pb2.VerdictEvidence | None:
+    # 구버전 서버는 필드를 비워 둔다. 종류가 UNSPECIFIED여도 근거 없음으로 본다.
+    if not response.HasField("evidence") or response.evidence.kind == verdict_pb2.EVIDENCE_KIND_UNSPECIFIED:
+        return None
+    return response.evidence
 
 
 def _snapshot(flow: http.HTTPFlow) -> Hold:
@@ -91,18 +100,48 @@ def _is_encoded(content_encoding: str) -> bool:
     return any(v.strip().lower() not in ("", "identity") for v in content_encoding.split(","))
 
 
-def _forbidden(outcome: Outcome, event_id: str) -> http.Response:
-    # 파일명 등 공격자가 채운 값은 넣지 않는다. text/plain이라 HTML로 해석될 여지도 없다.
-    if outcome.decision == verdict_pb2.FINAL_DECISION_BLOCKED:
+_PLAIN_HEADERS = {"Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store"}
+_HTML_HEADERS = {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": block_page.CONTENT_SECURITY_POLICY,
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+def _wants_html(request_headers: http.Headers | None) -> bool:
+    # 브라우저 탐색만 HTML을 받는다. curl·wget 등은 Accept에 text/html이 없어 text/plain을 받는다.
+    if request_headers is None:
+        return False
+    return "text/html" in ",".join(request_headers.get_all("accept")).lower()
+
+
+def _forbidden(outcome: Outcome, event_id: str, request_headers: http.Headers | None = None) -> http.Response:
+    # 파일명 등 공격자가 채운 값은 넣지 않는다. 서버가 준 사유와 이벤트 ID만 넣는다.
+    blocked = outcome.decision == verdict_pb2.FINAL_DECISION_BLOCKED
+    try:
+        if _wants_html(request_headers):
+            page = block_page.render(
+                fail_close=not blocked, reason=outcome.reason, event_id=event_id, evidence=outcome.evidence
+            )
+            return http.Response.make(403, page, _HTML_HEADERS)
+    except Exception:
+        # 안내 페이지를 못 만들어도 차단은 그대로다 — text/plain으로 떨어진다.
+        logger.exception("차단 안내 페이지 생성 실패 — text/plain으로 응답한다 (event=%s)", event_id)
+    if blocked:
         body = f"다운로드가 차단되었습니다.\n사유: {outcome.reason or '(없음)'}\n"
+        try:
+            evidence_lines = block_page.plain_lines(outcome.evidence)
+        except Exception:
+            # 근거 줄을 못 만들어도 403은 반드시 나가야 한다. 여기서 예외가 새면 원본 응답이 나간다(fail-open).
+            logger.exception("차단 근거 줄 생성 실패 — 근거 없이 응답한다 (event=%s)", event_id)
+            evidence_lines = []
+        body += "".join(f"{line}\n" for line in evidence_lines)
     else:
         body = "다운로드가 차단되었습니다: 검사 서버의 판정을 받지 못했습니다 (fail-close).\n"
     body += f"이벤트 ID: {event_id}\n"
-    return http.Response.make(
-        403,
-        body,
-        {"Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store"},
-    )
+    return http.Response.make(403, body, _PLAIN_HEADERS)
 
 
 def _timestamp(seconds: float) -> Timestamp:
@@ -298,7 +337,7 @@ class HoldPipeline:
         except asyncio.CancelledError:
             # 외부 취소(종료 등)는 삼키지 않고 다시 던진다. 다만 호출자가 취소를 삼키고 응답을 내보내더라도
             # 원본이 나가지 않도록 먼저 403으로 바꿔 둔다.
-            flow.response = _forbidden(FAIL_CLOSE, hold.event_id if hold else "-")
+            flow.response = _forbidden(FAIL_CLOSE, hold.event_id if hold else "-", flow.request.headers)
             raise
         except Exception:
             logger.exception("판정 실패 — fail-close로 차단한다: %s", flow.request.pretty_url)
@@ -308,7 +347,7 @@ class HoldPipeline:
         if outcome.decision == verdict_pb2.FINAL_DECISION_RELEASED:
             logger.info("통과: %s (event=%s)", flow.request.pretty_url, event_id)
         else:
-            flow.response = _forbidden(outcome, event_id)
+            flow.response = _forbidden(outcome, event_id, flow.request.headers)
             logger.warning("차단: %s (event=%s, reason=%s)", flow.request.pretty_url, event_id, outcome.reason)
 
         if hold is not None:
@@ -354,7 +393,13 @@ class HoldPipeline:
         if check.decision == verdict_pb2.DECISION_ALLOW:
             return Outcome(verdict_pb2.FINAL_DECISION_RELEASED, check.source, check.reason, cache_hit=True)
         if check.decision == verdict_pb2.DECISION_BLOCK:
-            return Outcome(verdict_pb2.FINAL_DECISION_BLOCKED, check.source, check.reason, cache_hit=True)
+            return Outcome(
+                verdict_pb2.FINAL_DECISION_BLOCKED,
+                check.source,
+                check.reason,
+                cache_hit=True,
+                evidence=_evidence_of(check),
+            )
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -371,7 +416,13 @@ class HoldPipeline:
         reason = submit.reason or ", ".join(submit.matched_rules)
         if submit.decision == verdict_pb2.DECISION_ALLOW:
             return Outcome(verdict_pb2.FINAL_DECISION_RELEASED, submit.source, reason, bytes_uploaded=body.size)
-        return Outcome(verdict_pb2.FINAL_DECISION_BLOCKED, submit.source, reason, bytes_uploaded=body.size)
+        return Outcome(
+            verdict_pb2.FINAL_DECISION_BLOCKED,
+            submit.source,
+            reason,
+            bytes_uploaded=body.size,
+            evidence=_evidence_of(submit),
+        )
 
     def _schedule_report(self, hold: Hold, outcome: Outcome) -> None:
         # 판정 뒤의 일이라 보류 시간에 넣지 않는다. 실패해도 판정은 바뀌지 않는다.
