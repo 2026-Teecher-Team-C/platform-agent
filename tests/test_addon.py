@@ -571,3 +571,56 @@ async def test_브라우저_요청이라도_서버에_닿지_못하면_fail_clos
 
     assert flow.response.status_code == 403
     assert "검사 서버에 연결하지 못해 다운로드를 막았습니다" in flow.response.get_text()
+
+
+async def test_CheckHash가_근거와_함께_BLOCK하면_브라우저_403_HTML에_패밀리가_나온다(fake_server, pipeline_factory):
+    port, servicer = fake_server
+    servicer.force_check_hash_decision = verdict_pb2.DECISION_BLOCK
+    servicer.force_check_hash_source = verdict_pb2.DECISION_SOURCE_SIMILARITY
+    servicer.force_check_hash_evidence = verdict_pb2.VerdictEvidence(
+        kind=verdict_pb2.EVIDENCE_KIND_SIMILARITY,
+        label="MalwareBazaar: Mirai",
+        family="Mirai",
+        tlsh_distance=12,
+        matched_sample_sha256="ab" * 32,
+    )
+    pipeline = pipeline_factory(port)
+    flow = make_flow(os.urandom(4096), accept="text/html,*/*;q=0.8")
+
+    await run_flow(pipeline, flow)
+
+    assert flow.response.status_code == 403
+    text = flow.response.get_text()
+    assert "알려진 악성코드(Mirai)와 매우 비슷한 파일입니다." in text
+    assert "ab" * 32 in text
+    assert servicer.last_submit_body == b""
+
+
+async def test_SubmitFile이_근거와_함께_BLOCK하면_text_plain에_룰이_나온다(fake_server, pipeline_factory):
+    port, servicer = fake_server
+    servicer.force_submit_file_decision = verdict_pb2.DECISION_BLOCK
+    servicer.force_submit_file_matched_rules = ["Win_Trojan_Agent"]
+    servicer.force_submit_file_evidence = verdict_pb2.VerdictEvidence(
+        kind=verdict_pb2.EVIDENCE_KIND_YARA, rules=[{"name": "Win_Trojan_Agent", "severity": "CRITICAL"}]
+    )
+    pipeline = pipeline_factory(port)
+    flow = make_flow(CLEAN_BODY)
+
+    await run_flow(pipeline, flow)
+
+    assert flow.response.status_code == 403
+    text = flow.response.get_text()
+    assert "악성코드 탐지 규칙에 걸렸습니다." in text
+    assert "CRITICAL" in text
+
+
+async def test_근거_없는_구버전_서버_BLOCK은_사유_한_줄_그대로다(fake_server, pipeline_factory):
+    port, _ = fake_server
+    pipeline = pipeline_factory(port)
+    flow = make_flow(b"prefix " + EICAR_BODY, accept="text/html")
+
+    await run_flow(pipeline, flow)
+
+    text = flow.response.get_text()
+    assert "<details" not in text
+    assert "<dt>사유</dt><dd>EICAR</dd>" in text

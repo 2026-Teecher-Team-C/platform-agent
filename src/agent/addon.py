@@ -67,9 +67,17 @@ class Outcome:
     reason: str = ""
     cache_hit: bool = False
     bytes_uploaded: int = 0
+    evidence: verdict_pb2.VerdictEvidence | None = None  # 차단 판정 근거. 구버전 서버면 None
 
 
 FAIL_CLOSE = Outcome(verdict_pb2.FINAL_DECISION_FAIL_CLOSE)
+
+
+def _evidence_of(response) -> verdict_pb2.VerdictEvidence | None:
+    # 구버전 서버는 필드를 비워 둔다. 종류가 UNSPECIFIED여도 근거 없음으로 본다.
+    if not response.HasField("evidence") or response.evidence.kind == verdict_pb2.EVIDENCE_KIND_UNSPECIFIED:
+        return None
+    return response.evidence
 
 
 def _snapshot(flow: http.HTTPFlow) -> Hold:
@@ -114,13 +122,16 @@ def _forbidden(outcome: Outcome, event_id: str, request_headers: http.Headers | 
     blocked = outcome.decision == verdict_pb2.FINAL_DECISION_BLOCKED
     try:
         if _wants_html(request_headers):
-            page = block_page.render(fail_close=not blocked, reason=outcome.reason, event_id=event_id)
+            page = block_page.render(
+                fail_close=not blocked, reason=outcome.reason, event_id=event_id, evidence=outcome.evidence
+            )
             return http.Response.make(403, page, _HTML_HEADERS)
     except Exception:
         # 안내 페이지를 못 만들어도 차단은 그대로다 — text/plain으로 떨어진다.
         logger.exception("차단 안내 페이지 생성 실패 — text/plain으로 응답한다 (event=%s)", event_id)
     if blocked:
         body = f"다운로드가 차단되었습니다.\n사유: {outcome.reason or '(없음)'}\n"
+        body += "".join(f"{line}\n" for line in block_page.plain_lines(outcome.evidence))
     else:
         body = "다운로드가 차단되었습니다: 검사 서버의 판정을 받지 못했습니다 (fail-close).\n"
     body += f"이벤트 ID: {event_id}\n"
@@ -376,7 +387,13 @@ class HoldPipeline:
         if check.decision == verdict_pb2.DECISION_ALLOW:
             return Outcome(verdict_pb2.FINAL_DECISION_RELEASED, check.source, check.reason, cache_hit=True)
         if check.decision == verdict_pb2.DECISION_BLOCK:
-            return Outcome(verdict_pb2.FINAL_DECISION_BLOCKED, check.source, check.reason, cache_hit=True)
+            return Outcome(
+                verdict_pb2.FINAL_DECISION_BLOCKED,
+                check.source,
+                check.reason,
+                cache_hit=True,
+                evidence=_evidence_of(check),
+            )
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -393,7 +410,13 @@ class HoldPipeline:
         reason = submit.reason or ", ".join(submit.matched_rules)
         if submit.decision == verdict_pb2.DECISION_ALLOW:
             return Outcome(verdict_pb2.FINAL_DECISION_RELEASED, submit.source, reason, bytes_uploaded=body.size)
-        return Outcome(verdict_pb2.FINAL_DECISION_BLOCKED, submit.source, reason, bytes_uploaded=body.size)
+        return Outcome(
+            verdict_pb2.FINAL_DECISION_BLOCKED,
+            submit.source,
+            reason,
+            bytes_uploaded=body.size,
+            evidence=_evidence_of(submit),
+        )
 
     def _schedule_report(self, hold: Hold, outcome: Outcome) -> None:
         # 판정 뒤의 일이라 보류 시간에 넣지 않는다. 실패해도 판정은 바뀌지 않는다.

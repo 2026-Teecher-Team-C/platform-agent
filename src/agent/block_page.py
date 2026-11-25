@@ -2,10 +2,15 @@
 
 한 장짜리 정적 HTML이다. CSS·SVG는 전부 인라인이고 JavaScript·외부 리소스는 없다(CSP가 막는다).
 넣는 값은 전부 `html.escape`를 거친다. 파일명·URL처럼 공격자가 정한 값은 받지도 않는다.
+서버가 판정 근거(VerdictEvidence)를 주면 위협 이름과 판정 방식을 말로 보여 주고, 거리·SHA·심각도 같은
+숫자는 접힌 "자세히"(`<details>`, JS 없음)에만 둔다. 근거가 없으면(구버전 서버) 사유 한 줄 그대로다.
 색·글꼴·모서리·간격은 관리 콘솔(platform-server/console/src/index.css)의 토큰을 따른다.
 """
 
+from dataclasses import dataclass
 from html import escape
+
+from teecher.verdict.v1 import verdict_pb2
 
 CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
 
@@ -99,6 +104,33 @@ code {
   user-select: all;
   -webkit-user-select: all;
 }
+.threat { display: block; margin-bottom: 2px; font-size: 16px; font-weight: 700; color: var(--text); }
+.why { margin: 0; color: var(--muted); }
+details { margin-top: 12px; font-size: 13px; }
+summary {
+  width: fit-content;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+summary:hover { color: var(--text); }
+summary:focus-visible { outline: 2px solid var(--tone); outline-offset: 2px; border-radius: 4px; }
+details dl {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+details dl > div { padding: 10px 12px; }
+details dl > div:last-child { border-bottom: 0; }
+details dt { margin-bottom: 2px; }
+details dd { font-size: 13px; }
+details code { padding: 0; border: 0; background: none; font-size: 12px; }
+details ul { margin: 0; padding: 0; list-style: none; }
+details li + li { margin-top: 2px; }
+.sev { margin-left: 6px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.02em; }
+.unit { color: var(--muted); }
 .next {
   margin: 20px 24px 24px;
   padding: 10px 14px;
@@ -140,10 +172,120 @@ _FAIL_CLOSE = {
 FAIL_CLOSE_REASON = "검사 서버의 판정을 받지 못했습니다 (fail-close)"
 
 
-def render(*, fail_close: bool, reason: str, event_id: str) -> str:
-    """차단 안내 HTML을 만든다. reason·event_id는 여기서 이스케이프한다."""
+MAX_RULES = 5
+_DISTANCE_HINT = "낮을수록 비슷함"
+
+
+@dataclass(frozen=True)
+class _Detail:
+    label: str
+    html: str  # 이미 이스케이프한 값
+    plain: str
+
+
+@dataclass(frozen=True)
+class _Explained:
+    threat: str
+    sentence: str
+    details: tuple[_Detail, ...]
+
+
+def _one_line(value: str) -> str:
+    # text/plain에 서버 값이 줄바꿈·제어 문자로 가짜 줄을 만들지 못하게 한다.
+    return "".join(ch if ch.isprintable() else " " for ch in value)
+
+
+def _rules(evidence: verdict_pb2.VerdictEvidence) -> _Detail:
+    shown = list(evidence.rules)[:MAX_RULES]
+    rest = len(evidence.rules) - len(shown)
+    items = "".join(
+        f"<li>{escape(r.name)}" + (f'<span class="sev">{escape(r.severity)}</span>' if r.severity else "") + "</li>"
+        for r in shown
+    )
+    plain = ", ".join(f"{r.name} ({r.severity})" if r.severity else r.name for r in shown)
+    if rest > 0:
+        items += f'<li class="unit">외 {rest}개</li>'
+        plain += f" 외 {rest}개"
+    return _Detail("탐지 규칙", f"<ul>{items}</ul>", plain)
+
+
+def _explain(evidence: verdict_pb2.VerdictEvidence | None) -> _Explained | None:
+    """설계 3-3 표. 근거가 없거나 모르는 종류면 None(사유 한 줄 화면)."""
+    if evidence is None:
+        return None
+    kind = evidence.kind
+    if kind == verdict_pb2.EVIDENCE_KIND_BLACKLIST:
+        return _Explained(
+            evidence.family or "알려진 악성 파일",
+            "보안 위협 목록에 등록된 파일과 똑같은 파일입니다.",
+            (_Detail("등록 사유", escape(evidence.label or "(없음)"), evidence.label or "(없음)"),),
+        )
+    if kind == verdict_pb2.EVIDENCE_KIND_SIMILARITY:
+        known = f"알려진 악성코드({evidence.family})" if evidence.family else "알려진 악성코드"
+        details = [
+            _Detail(
+                "유사도 거리",
+                f'{evidence.tlsh_distance} <span class="unit">({_DISTANCE_HINT})</span>',
+                f"{evidence.tlsh_distance} ({_DISTANCE_HINT})",
+            )
+        ]
+        if evidence.matched_sample_sha256:
+            sha = evidence.matched_sample_sha256
+            details.append(_Detail("비교한 샘플 SHA-256", f"<code>{escape(sha)}</code>", sha))
+        return _Explained(
+            evidence.family or "알려진 악성코드 변종",
+            f"{known}와 매우 비슷한 파일입니다. 일부만 바꾼 변종일 수 있습니다.",
+            tuple(details),
+        )
+    if kind == verdict_pb2.EVIDENCE_KIND_YARA:
+        first = evidence.rules[0].name if evidence.rules else ""
+        return _Explained(
+            first or "악성코드 탐지 규칙",
+            "악성코드 탐지 규칙에 걸렸습니다.",
+            (_rules(evidence),) if evidence.rules else (),
+        )
+    if kind == verdict_pb2.EVIDENCE_KIND_CACHE:
+        previous = evidence.previous_verdict or "(없음)"
+        return _Explained(
+            "이전 검사 결과",
+            "이전에 악성으로 판정된 파일입니다.",
+            (_Detail("이전 판정", escape(previous), previous),),
+        )
+    return None
+
+
+def plain_lines(evidence: verdict_pb2.VerdictEvidence | None) -> list[str]:
+    """text/plain 403에 덧붙일 줄. 위협 이름·설명 한 줄, 숫자 한 줄. 근거가 없으면 빈 목록."""
+    explained = _explain(evidence)
+    if explained is None:
+        return []
+    lines = [f"위협: {explained.threat} — {explained.sentence}"]
+    if explained.details:
+        lines.append("자세히: " + ", ".join(f"{d.label} {d.plain}" for d in explained.details))
+    return [_one_line(line) for line in lines]
+
+
+def _evidence_row(explained: _Explained) -> str:
+    details = ""
+    if explained.details:
+        rows = "".join(f"<div><dt>{escape(d.label)}</dt><dd>{d.html}</dd></div>" for d in explained.details)
+        details = f"<details><summary>자세히</summary><dl>{rows}</dl></details>"
+    return (
+        f'<div><dt>판정 근거</dt><dd><strong class="threat">{escape(explained.threat)}</strong>'
+        f'<p class="why">{escape(explained.sentence)}</p>{details}</dd></div>'
+    )
+
+
+def render(*, fail_close: bool, reason: str, event_id: str, evidence: verdict_pb2.VerdictEvidence | None = None) -> str:
+    """차단 안내 HTML을 만든다. reason·event_id·근거 값은 여기서 이스케이프한다."""
     copy = _FAIL_CLOSE if fail_close else _BLOCKED
     shown_reason = FAIL_CLOSE_REASON if fail_close else (reason or "(없음)")
+    explained = None if fail_close else _explain(evidence)
+    if explained is None:
+        first_row = f"<div><dt>사유</dt><dd>{escape(shown_reason)}</dd></div>"
+    else:
+        # 서버 사유(예: "TLSH distance: 12")는 숫자라 본문에 두지 않는다. 같은 정보가 "자세히"에 있다.
+        first_row = _evidence_row(explained)
     return f"""<!doctype html>
 <html lang="ko" class="{copy["class"]}">
 <head>
@@ -161,7 +303,7 @@ def render(*, fail_close: bool, reason: str, event_id: str) -> str:
 <p>{escape(copy["lead"])}</p>
 </header>
 <dl>
-<div><dt>사유</dt><dd>{escape(shown_reason)}</dd></div>
+{first_row}
 <div><dt>이벤트 ID</dt><dd><code>{escape(event_id)}</code></dd></div>
 </dl>
 <p class="next">{escape(copy["next"])}</p>

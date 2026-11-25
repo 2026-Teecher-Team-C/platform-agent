@@ -48,6 +48,8 @@ class FakeVerdictServicer(verdict_pb2_grpc.VerdictServiceServicer):
         self.force_check_hash_source: int = verdict_pb2.DECISION_SOURCE_UNSPECIFIED
         self.force_submit_file_decision: int | None = None
         self.force_submit_file_matched_rules: list[str] = []
+        self.force_check_hash_evidence: verdict_pb2.VerdictEvidence | None = None
+        self.force_submit_file_evidence: verdict_pb2.VerdictEvidence | None = None
 
     async def CheckHash(self, request, context):
         self.last_metadata = _metadata_dict(context)
@@ -57,6 +59,8 @@ class FakeVerdictServicer(verdict_pb2_grpc.VerdictServiceServicer):
         if self.force_check_hash_decision is not None:
             response = verdict_pb2.CheckHashResponse(source=self.force_check_hash_source)
             response.decision = self.force_check_hash_decision
+            if self.force_check_hash_evidence is not None:
+                response.evidence.CopyFrom(self.force_check_hash_evidence)
             return response
         if request.sha256 == EICAR_SHA256:
             return verdict_pb2.CheckHashResponse(
@@ -87,6 +91,8 @@ class FakeVerdictServicer(verdict_pb2_grpc.VerdictServiceServicer):
         if self.force_submit_file_decision is not None:
             response = verdict_pb2.SubmitFileResponse(matched_rules=self.force_submit_file_matched_rules)
             response.decision = self.force_submit_file_decision
+            if self.force_submit_file_evidence is not None:
+                response.evidence.CopyFrom(self.force_submit_file_evidence)
             return response
 
         if EICAR_BODY in body:
