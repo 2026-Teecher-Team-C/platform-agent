@@ -286,3 +286,28 @@ def test_브라우저_403에_근거가_보인다():
 
     assert "알려진 악성코드(Mirai)와 매우 비슷한 파일입니다." in text
     assert SAMPLE_SHA in text
+
+
+def test_머리에_아이콘이_없다():
+    for fail_close in (False, True):
+        page = block_page.render(fail_close=fail_close, reason="r", event_id="e")
+        assert "<svg" not in page
+        assert 'class="icon"' not in page
+
+
+def test_차단_화면_하단은_다음_단계_번호_목록이다():
+    page = block_page.render(fail_close=False, reason="r", event_id="e")
+
+    assert 'class="next"' not in page
+    assert "<h2>다음 단계</h2>" in page
+    steps = page.split('<ol class="steps">')[1].split("</ol>")[0]
+    assert steps.count("<li>") == 2
+    assert "다른 경로" in steps
+    assert "이벤트 ID" in steps
+
+
+def test_fail_close_화면의_다음_단계는_다시_시도부터다():
+    page = block_page.render(fail_close=True, reason="", event_id="e")
+
+    steps = page.split('<ol class="steps">')[1].split("</ol>")[0]
+    assert steps.index("다시 시도") < steps.index("이벤트 ID")
