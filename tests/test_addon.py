@@ -545,3 +545,29 @@ async def test_tlsh_failure_does_not_block(fake_server, pipeline_factory, monkey
     [request] = servicer.check_hash_requests
     assert request.tlsh == ""
     assert servicer.last_submit_body == CLEAN_BODY
+
+
+async def test_브라우저_요청이면_차단_응답이_HTML_안내_페이지다(fake_server, pipeline_factory):
+    port, _ = fake_server
+    pipeline = pipeline_factory(port)
+    flow = make_flow(b"prefix " + EICAR_BODY, accept="text/html,application/xhtml+xml,*/*;q=0.8")
+
+    await run_flow(pipeline, flow)
+    await pipeline.drain_reports()
+
+    assert flow.response.status_code == 403
+    assert flow.response.headers["content-type"] == "text/html; charset=utf-8"
+    text = flow.response.get_text()
+    assert flow.metadata[HOLD_KEY].event_id in text
+    assert "EICAR" in text
+    assert "<img" not in text  # 공격자가 정한 파일명은 넣지 않는다
+
+
+async def test_브라우저_요청이라도_서버에_닿지_못하면_fail_close_안내_페이지다(pipeline_factory):
+    pipeline = pipeline_factory(unused_port(), hold_timeout=1)
+    flow = make_flow(CLEAN_BODY, accept="text/html")
+
+    await run_flow(pipeline, flow)
+
+    assert flow.response.status_code == 403
+    assert "검사 서버에 연결하지 못해 다운로드를 막았습니다" in flow.response.get_text()
