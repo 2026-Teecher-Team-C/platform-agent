@@ -131,7 +131,13 @@ def _forbidden(outcome: Outcome, event_id: str, request_headers: http.Headers | 
         logger.exception("차단 안내 페이지 생성 실패 — text/plain으로 응답한다 (event=%s)", event_id)
     if blocked:
         body = f"다운로드가 차단되었습니다.\n사유: {outcome.reason or '(없음)'}\n"
-        body += "".join(f"{line}\n" for line in block_page.plain_lines(outcome.evidence))
+        try:
+            evidence_lines = block_page.plain_lines(outcome.evidence)
+        except Exception:
+            # 근거 줄을 못 만들어도 403은 반드시 나가야 한다. 여기서 예외가 새면 원본 응답이 나간다(fail-open).
+            logger.exception("차단 근거 줄 생성 실패 — 근거 없이 응답한다 (event=%s)", event_id)
+            evidence_lines = []
+        body += "".join(f"{line}\n" for line in evidence_lines)
     else:
         body = "다운로드가 차단되었습니다: 검사 서버의 판정을 받지 못했습니다 (fail-close).\n"
     body += f"이벤트 ID: {event_id}\n"
