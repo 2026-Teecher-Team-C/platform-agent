@@ -4,7 +4,7 @@ import pytest
 from mitmproxy import http
 
 from agent import block_page
-from agent.addon import FAIL_CLOSE, Outcome, _forbidden
+from agent.addon import FAIL_CLOSE, Outcome, _appeal_url_of, _forbidden
 from teecher.verdict.v1 import verdict_pb2
 
 BROWSER_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -331,3 +331,72 @@ def test_근거_풀이가_예외를_던져도_HTML과_text_plain_모두_403으�
         assert response.status_code == 403
         assert response.headers["content-type"] == "text/plain; charset=utf-8"
         assert EVENT_ID in response.get_text()
+
+
+APPEAL_URL = "https://console.test/appeal/abc"
+WITH_APPEAL = Outcome(verdict_pb2.FINAL_DECISION_BLOCKED, reason="EICAR_Test_File", appeal_url=APPEAL_URL)
+
+
+def test_소명_링크가_있으면_버튼을_그린다():
+    text = _forbidden(WITH_APPEAL, EVENT_ID, headers(BROWSER_ACCEPT)).get_text()
+
+    assert f'<a class="appeal" href="{APPEAL_URL}">소명하기</a>' in text
+    assert "업무에 필요한 파일이라면 소명을 남겨 주세요. 보안 담당자가 검토합니다." in text
+    assert text.index("소명하기") < text.index("다음 단계")
+    assert "<script" not in text.lower()
+
+
+def test_소명_링크가_없으면_버튼이_없다():
+    text = _forbidden(BLOCKED, EVENT_ID, headers(BROWSER_ACCEPT)).get_text()
+
+    assert "소명" not in text
+    assert 'class="appeal"' not in text
+
+
+def test_fail_close에는_소명_버튼이_없다():
+    outcome = Outcome(verdict_pb2.FINAL_DECISION_FAIL_CLOSE, appeal_url=APPEAL_URL)
+    text = _forbidden(outcome, EVENT_ID, headers(BROWSER_ACCEPT)).get_text()
+
+    assert "소명하기" not in text
+    assert APPEAL_URL not in text
+
+
+def test_소명_링크의_따옴표는_이스케이프한다():
+    outcome = Outcome(verdict_pb2.FINAL_DECISION_BLOCKED, appeal_url='https://x/"><script>alert(1)</script>')
+    text = _forbidden(outcome, EVENT_ID, headers(BROWSER_ACCEPT)).get_text().lower()
+
+    assert "<script" not in text
+    assert "&quot;&gt;&lt;script&gt;" in text
+
+
+@pytest.mark.parametrize("value", ["javascript:alert(1)", "data:text/html,x", "//evil/x", "ftp://x/y", "", "  "])
+def test_http_https가_아닌_소명_링크는_버린다(value):
+    assert _appeal_url_of(verdict_pb2.CheckHashResponse(appeal_url=value)) == ""
+
+
+@pytest.mark.parametrize("value", ["https://console.test/appeal/abc", "http://localhost:5173/appeal/abc"])
+def test_http_https_소명_링크는_그대로_쓴다(value):
+    assert _appeal_url_of(verdict_pb2.SubmitFileResponse(appeal_url=value)) == value
+
+
+def test_plain_403에_소명_줄을_붙인다():
+    text = _forbidden(WITH_APPEAL, EVENT_ID, headers("*/*")).get_text()
+
+    assert text == f"다운로드가 차단되었습니다.\n사유: EICAR_Test_File\n소명: {APPEAL_URL}\n이벤트 ID: {EVENT_ID}\n"
+
+
+def test_fail_close_plain_403에는_소명_줄이_없다():
+    outcome = Outcome(verdict_pb2.FINAL_DECISION_FAIL_CLOSE, appeal_url=APPEAL_URL)
+
+    assert "소명" not in _forbidden(outcome, EVENT_ID, headers("*/*")).get_text()
+
+
+def test_소명_링크_처리가_실패해도_403은_나간다(monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("링크 실패")
+
+    monkeypatch.setattr(block_page, "render", boom)
+    response = _forbidden(WITH_APPEAL, EVENT_ID, headers(BROWSER_ACCEPT))
+
+    assert response.status_code == 403
+    assert response.headers["content-type"].startswith("text/plain")

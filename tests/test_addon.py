@@ -624,3 +624,42 @@ async def test_근거_없는_구버전_서버_BLOCK은_사유_한_줄_그대로�
     text = flow.response.get_text()
     assert "<details" not in text
     assert "<dt>사유</dt><dd>EICAR</dd>" in text
+
+
+async def test_CheckHash_BLOCK의_appeal_url이_Outcome에_실린다(fake_server, pipeline_factory):
+    port, servicer = fake_server
+    servicer.force_check_hash_decision = verdict_pb2.DECISION_BLOCK
+    servicer.force_check_hash_appeal_url = "https://console.test/appeal/check"
+    pipeline = pipeline_factory(port)
+    flow = make_flow(os.urandom(4096), accept="text/html")
+
+    await run_flow(pipeline, flow)
+
+    assert flow.response.status_code == 403
+    assert 'href="https://console.test/appeal/check"' in flow.response.get_text()
+
+
+async def test_SubmitFile_BLOCK의_appeal_url이_Outcome에_실린다(fake_server, pipeline_factory):
+    port, servicer = fake_server
+    servicer.force_submit_file_decision = verdict_pb2.DECISION_BLOCK
+    servicer.force_submit_file_appeal_url = "https://console.test/appeal/submit"
+    pipeline = pipeline_factory(port)
+    flow = make_flow(CLEAN_BODY)
+
+    await run_flow(pipeline, flow)
+
+    assert flow.response.status_code == 403
+    assert "소명: https://console.test/appeal/submit\n" in flow.response.get_text()
+
+
+async def test_안전하지_않은_appeal_url은_버리고_그대로_차단한다(fake_server, pipeline_factory):
+    port, servicer = fake_server
+    servicer.force_submit_file_decision = verdict_pb2.DECISION_BLOCK
+    servicer.force_submit_file_appeal_url = "javascript:alert(1)"
+    pipeline = pipeline_factory(port)
+    flow = make_flow(CLEAN_BODY, accept="text/html")
+
+    await run_flow(pipeline, flow)
+
+    assert flow.response.status_code == 403
+    assert "javascript:" not in flow.response.get_text()

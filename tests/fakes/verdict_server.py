@@ -50,6 +50,8 @@ class FakeVerdictServicer(verdict_pb2_grpc.VerdictServiceServicer):
         self.force_submit_file_matched_rules: list[str] = []
         self.force_check_hash_evidence: verdict_pb2.VerdictEvidence | None = None
         self.force_submit_file_evidence: verdict_pb2.VerdictEvidence | None = None
+        self.force_check_hash_appeal_url: str = ""
+        self.force_submit_file_appeal_url: str = ""
 
     async def CheckHash(self, request, context):
         self.last_metadata = _metadata_dict(context)
@@ -59,6 +61,7 @@ class FakeVerdictServicer(verdict_pb2_grpc.VerdictServiceServicer):
         if self.force_check_hash_decision is not None:
             response = verdict_pb2.CheckHashResponse(source=self.force_check_hash_source)
             response.decision = self.force_check_hash_decision
+            response.appeal_url = self.force_check_hash_appeal_url
             if self.force_check_hash_evidence is not None:
                 response.evidence.CopyFrom(self.force_check_hash_evidence)
             return response
@@ -91,6 +94,7 @@ class FakeVerdictServicer(verdict_pb2_grpc.VerdictServiceServicer):
         if self.force_submit_file_decision is not None:
             response = verdict_pb2.SubmitFileResponse(matched_rules=self.force_submit_file_matched_rules)
             response.decision = self.force_submit_file_decision
+            response.appeal_url = self.force_submit_file_appeal_url
             if self.force_submit_file_evidence is not None:
                 response.evidence.CopyFrom(self.force_submit_file_evidence)
             return response
