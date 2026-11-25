@@ -318,8 +318,12 @@ def test_근거_풀이가_예외를_던져도_HTML과_text_plain_모두_403으�
         raise RuntimeError("evidence broke")
 
     monkeypatch.setattr(block_page, "_explain", broken)
-    outcome = Outcome(verdict_pb2.FINAL_DECISION_BLOCKED, verdict_pb2.DECISION_SOURCE_SIMILARITY, "TLSH distance: 12",
-                      evidence=EVIDENCE_BLACKLIST)
+    outcome = Outcome(
+        verdict_pb2.FINAL_DECISION_BLOCKED,
+        verdict_pb2.DECISION_SOURCE_SIMILARITY,
+        "TLSH distance: 12",
+        evidence=EVIDENCE_BLACKLIST,
+    )
 
     for request_headers in (headers(BROWSER_ACCEPT), headers("*/*"), None):
         response = _forbidden(outcome, EVENT_ID, request_headers)
