@@ -68,6 +68,7 @@ class Outcome:
     cache_hit: bool = False
     bytes_uploaded: int = 0
     evidence: verdict_pb2.VerdictEvidence | None = None  # 차단 판정 근거. 구버전 서버면 None
+    appeal_url: str = ""  # 소명 페이지 링크. 서버가 근거 있는 차단에만 준다. 없으면 빈 문자열
 
 
 FAIL_CLOSE = Outcome(verdict_pb2.FINAL_DECISION_FAIL_CLOSE)
@@ -117,13 +118,23 @@ def _wants_html(request_headers: http.Headers | None) -> bool:
     return "text/html" in ",".join(request_headers.get_all("accept")).lower()
 
 
+def _appeal_url_of(response) -> str:
+    # 링크는 사용자가 클릭한다. http(s)가 아니면(javascript: 등) 버리고 소명 없이 그대로 차단한다.
+    url = response.appeal_url
+    return url if url.startswith(("https://", "http://")) else ""
+
+
 def _forbidden(outcome: Outcome, event_id: str, request_headers: http.Headers | None = None) -> http.Response:
     # 파일명 등 공격자가 채운 값은 넣지 않는다. 서버가 준 사유와 이벤트 ID만 넣는다.
     blocked = outcome.decision == verdict_pb2.FINAL_DECISION_BLOCKED
     try:
         if _wants_html(request_headers):
             page = block_page.render(
-                fail_close=not blocked, reason=outcome.reason, event_id=event_id, evidence=outcome.evidence
+                fail_close=not blocked,
+                reason=outcome.reason,
+                event_id=event_id,
+                evidence=outcome.evidence,
+                appeal_url=outcome.appeal_url,
             )
             return http.Response.make(403, page, _HTML_HEADERS)
     except Exception:
@@ -138,6 +149,8 @@ def _forbidden(outcome: Outcome, event_id: str, request_headers: http.Headers | 
             logger.exception("차단 근거 줄 생성 실패 — 근거 없이 응답한다 (event=%s)", event_id)
             evidence_lines = []
         body += "".join(f"{line}\n" for line in evidence_lines)
+        if outcome.appeal_url:
+            body += f"소명: {block_page.one_line(outcome.appeal_url)}\n"
     else:
         body = "다운로드가 차단되었습니다: 검사 서버의 판정을 받지 못했습니다 (fail-close).\n"
     body += f"이벤트 ID: {event_id}\n"
@@ -399,6 +412,7 @@ class HoldPipeline:
                 check.reason,
                 cache_hit=True,
                 evidence=_evidence_of(check),
+                appeal_url=_appeal_url_of(check),
             )
 
         remaining = deadline - time.monotonic()
@@ -422,6 +436,7 @@ class HoldPipeline:
             reason,
             bytes_uploaded=body.size,
             evidence=_evidence_of(submit),
+            appeal_url=_appeal_url_of(submit),
         )
 
     def _schedule_report(self, hold: Hold, outcome: Outcome) -> None:

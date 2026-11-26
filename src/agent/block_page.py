@@ -117,6 +117,21 @@ details ul { margin: 0; padding: 0; list-style: none; }
 details li + li { margin-top: 2px; }
 .sev { margin-left: 6px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.02em; }
 .unit { color: var(--muted); }
+.appeal-wrap { padding: 16px 24px 0; }
+.appeal-wrap p { margin: 0 0 10px; color: var(--muted); font-size: 13px; }
+.appeal {
+  display: inline-block;
+  padding: 9px 16px;
+  border: 1px solid var(--tone);
+  border-radius: 8px;
+  background: var(--tone);
+  color: var(--surface);
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.appeal:hover { filter: brightness(0.94); }
+.appeal:focus-visible { outline: 2px solid var(--tone); outline-offset: 2px; }
 .steps-wrap { padding: 16px 24px 22px; }
 h2 { margin: 0 0 8px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .steps { margin: 0; padding-left: 18px; font-size: 13px; }
@@ -162,7 +177,7 @@ class _Explained:
     details: tuple[_Detail, ...]
 
 
-def _one_line(value: str) -> str:
+def one_line(value: str) -> str:
     # text/plain에 서버 값이 줄바꿈·제어 문자로 가짜 줄을 만들지 못하게 한다.
     return "".join(ch if ch.isprintable() else " " for ch in value)
 
@@ -234,7 +249,7 @@ def plain_lines(evidence: verdict_pb2.VerdictEvidence | None) -> list[str]:
     lines = [f"위협: {explained.threat} — {explained.sentence}"]
     if explained.details:
         lines.append("자세히: " + ", ".join(f"{d.label} {d.plain}" for d in explained.details))
-    return [_one_line(line) for line in lines]
+    return [one_line(line) for line in lines]
 
 
 def _evidence_row(explained: _Explained) -> str:
@@ -248,8 +263,15 @@ def _evidence_row(explained: _Explained) -> str:
     )
 
 
-def render(*, fail_close: bool, reason: str, event_id: str, evidence: verdict_pb2.VerdictEvidence | None = None) -> str:
-    """차단 안내 HTML을 만든다. reason·event_id·근거 값은 여기서 이스케이프한다."""
+def render(
+    *,
+    fail_close: bool,
+    reason: str,
+    event_id: str,
+    evidence: verdict_pb2.VerdictEvidence | None = None,
+    appeal_url: str = "",
+) -> str:
+    """차단 안내 HTML을 만든다. reason·event_id·근거·소명 링크 값은 여기서 이스케이프한다."""
     copy = _FAIL_CLOSE if fail_close else _BLOCKED
     shown_reason = FAIL_CLOSE_REASON if fail_close else (reason or "(없음)")
     explained = None if fail_close else _explain(evidence)
@@ -258,6 +280,14 @@ def render(*, fail_close: bool, reason: str, event_id: str, evidence: verdict_pb
     else:
         # 서버 사유(예: "TLSH distance: 12")는 숫자라 본문에 두지 않는다. 같은 정보가 "자세히"에 있다.
         first_row = _evidence_row(explained)
+    appeal = ""
+    if appeal_url and not fail_close:
+        appeal = (
+            '<section class="appeal-wrap">'
+            "<p>업무에 필요한 파일이라면 소명을 남겨 주세요. 보안 담당자가 검토합니다.</p>"
+            f'<a class="appeal" href="{escape(appeal_url)}">소명하기</a>'
+            "</section>\n"
+        )
     steps = "".join(f"<li>{escape(step)}</li>" for step in copy["steps"])
     return f"""<!doctype html>
 <html lang="ko" class="{copy["class"]}">
@@ -278,7 +308,7 @@ def render(*, fail_close: bool, reason: str, event_id: str, evidence: verdict_pb
 {first_row}
 <div><dt>이벤트 ID</dt><dd><code>{escape(event_id)}</code></dd></div>
 </dl>
-<section class="steps-wrap">
+{appeal}<section class="steps-wrap">
 <h2>다음 단계</h2>
 <ol class="steps">{steps}</ol>
 </section>
